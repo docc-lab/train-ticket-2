@@ -66,15 +66,25 @@ function update_tt_dp_cm {
   nacosCM="$1"
   rabbitmqCM="$2"
 
+  echo "Updating deploy.yaml with nacos=${nacosCM} and rabbitmq=${rabbitmqCM}"
+  echo "Sample file: $dp_sample_yaml"
+  echo "Target file: $dp_yaml"
+  if [ ! -f "$dp_sample_yaml" ]; then
+    echo "Error: $dp_sample_yaml does not exist"
+    return 1
+  fi
+
   cp $dp_sample_yaml $dp_yaml
 
-  if [ "$(uname)"="Darwin" ]; then
-    sed -i "" "s/nacos/${nacosCM}/g" $dp_yaml
-    sed -i "" "s/rabbitmq/${rabbitmqCM}/g" $dp_yaml
-  else
-    sed -i "s/nacos/${nacosCM}/g" $dp_yaml
-    sed -i "s/rabbitmq/${rabbitmqCM}/g" $dp_yaml
+  if [ ! -f "$dp_yaml" ]; then
+    echo "Error: Failed to create $dp_yaml"
+    return 1
   fi
+
+  sed -i.bak "s/nacos/${nacosCM}/g" $dp_yaml && rm ${dp_yaml}.bak
+  sed -i.bak "s/rabbitmq/${rabbitmqCM}/g" $dp_yaml && rm ${dp_yaml}.bak
+
+
 }
 
 function update_tt_sw_dp_cm {
