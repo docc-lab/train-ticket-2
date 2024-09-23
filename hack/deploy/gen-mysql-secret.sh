@@ -90,14 +90,43 @@ function update_tt_dp_cm {
 function update_tt_sw_dp_cm {
   nacosCM="$1"
   rabbitmqCM="$2"
+  echo "Current directory: $(pwd)"
+  echo "Sample file path: $sw_dp_sample_yaml"
+  echo "Target file path: $sw_dp_yaml"
 
+  echo "Copying sample file..."
   cp $sw_dp_sample_yaml $sw_dp_yaml
-  if [ "$(uname)"="Darwin" ]; then
-    sed -i "" "s/nacos/${nacosCM}/g" $sw_dp_yaml
-    sed -i "" "s/rabbitmq/${rabbitmqCM}/g" $sw_dp_yaml
+  if [ -f "$sw_dp_yaml" ]; then
+    echo "File copied successfully"
   else
-    sed -i "s/nacos/${nacosCM}/g" $sw_dp_yaml
-    sed -i "s/rabbitmq/${rabbitmqCM}/g" $sw_dp_yaml
+    echo "Failed to copy file"
+    return 1
+  fi
+
+  echo "Updating file with nacos=${nacosCM} and rabbitmq=${rabbitmqCM}"
+
+  # Add error checking for sed commands
+  if sed -i "s/nacos/${nacosCM}/g" $sw_dp_yaml; then
+    echo "Nacos replacement successful"
+  else
+    echo "Nacos replacement failed"
+    return 1
+  fi
+
+  if sed -i "s/rabbitmq/${rabbitmqCM}/g" $sw_dp_yaml; then
+    echo "RabbitMQ replacement successful"
+  else
+    echo "RabbitMQ replacement failed"
+    return 1
+  fi
+
+  echo "File update complete"
+
+  # Check if any changes were made
+  if diff $sw_dp_sample_yaml $sw_dp_yaml > /dev/null; then
+    echo "Warning: No changes were made to the file"
+  else
+    echo "Changes were successfully made to the file"
   fi
 }
 
