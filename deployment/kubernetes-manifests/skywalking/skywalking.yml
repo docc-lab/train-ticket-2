@@ -7,9 +7,7 @@ data:
   STORAGE_ES_CLUSTER_NODES: 'elasticsearch:9200'
   CORE_GRPC_PORT: '11800'
   CORE_REST_PORT: '12800'
-
 ---
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -44,7 +42,7 @@ spec:
           resources:
             limits:
               cpu: '2'
-              memory: 2Gi
+              memory: 4Gi
             requests:
               cpu: '1'
               memory: 2Gi
@@ -56,9 +54,7 @@ spec:
             path: /etc/localtime
             type: ''
           name: volume-localtime
-
 ---
-
 apiVersion: v1
 kind: Service
 metadata:
@@ -78,9 +74,7 @@ spec:
       targetPort: 11800
   selector:
     app: skywalking
-
 ---
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -111,7 +105,7 @@ spec:
           resources:
             limits:
               cpu: '2'
-              memory: 1Gi
+              memory: 2Gi
             requests:
               cpu: '1'
               memory: 1Gi
@@ -123,9 +117,7 @@ spec:
             path: /etc/localtime
             type: ''
           name: volume-localtime
-
 ---
-
 apiVersion: v1
 kind: Service
 metadata:
