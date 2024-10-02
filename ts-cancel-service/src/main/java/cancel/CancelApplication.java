@@ -1,5 +1,6 @@
 package cancel;
 
+import java.time.Duration;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.web.client.RestTemplateBuilder;
@@ -30,6 +31,25 @@ public class CancelApplication {
     @LoadBalanced
     @Bean
     public RestTemplate restTemplate(RestTemplateBuilder builder) {
-        return builder.build();
+        return new RestTemplateBuilder()
+            // .requestFactory(this::requestFactory)
+            .setReadTimeout(Duration.ofMillis(200))
+            .build();
     }
+
+    //     private HttpComponentsClientHttpRequestFactory requestFactory() {
+
+    //     RequestConfig requestConfig = RequestConfig.custom()
+    //         .setConnectionRequestTimeout(2000)
+    //         .setSocketTimeout(2000)
+    //         .build();
+    //     PoolingHttpClientConnectionManager connectionManager = new PoolingHttpClientConnectionManager();
+    //     connectionManager.setMaxTotal(5);
+    //     connectionManager.setDefaultMaxPerRoute(5);
+    //     CloseableHttpClient httpClient = HttpClientBuilder.create()
+    //                                                       .setConnectionManager(connectionManager)
+    //                                                       .setDefaultRequestConfig(requestConfig)
+    //                                                       .build();
+    //     return new HttpComponentsClientHttpRequestFactory(httpClient);
+    // }
 }
