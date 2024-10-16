@@ -37,6 +37,22 @@ spec:
       labels:
         run: elasticsearch
     spec:
+      nodeSelector:
+        skywalking: "true"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: skywalking
+                operator: In
+                values:
+                - "true"
+      tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "skywalking"
+        effect: "NoSchedule"
       containers:
       - env:
         - name: discovery.type
@@ -50,11 +66,4 @@ spec:
         - containerPort: 9300
           name: tramsport
           protocol: TCP
-        resources:
-          limits:
-            cpu: 500m
-            memory: 2Gi
-          requests:
-            cpu: 500m
-            memory: 2Gi
 status: {}

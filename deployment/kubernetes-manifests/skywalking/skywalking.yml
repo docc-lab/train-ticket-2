@@ -24,6 +24,22 @@ spec:
       labels:
         app: skywalking
     spec:
+      nodeSelector:
+        skywalking: "true"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: skywalking
+                operator: In
+                values:
+                - "true"
+      tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "skywalking"
+        effect: "NoSchedule"
       containers:
         - envFrom:
           - prefix: SW_
@@ -39,13 +55,6 @@ spec:
             - containerPort: 11800
               name: grpc
               protocol: TCP
-          resources:
-            limits:
-              cpu: '2'
-              memory: 4Gi
-            requests:
-              cpu: '1'
-              memory: 2Gi
           volumeMounts:
             - mountPath: /etc/localtime
               name: volume-localtime
@@ -91,6 +100,22 @@ spec:
       labels:
         app: skywalking-ui
     spec:
+      nodeSelector:
+        skywalking: "true"
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: skywalking
+                operator: In
+                values:
+                - "true"
+      tolerations:
+      - key: "dedicated"
+        operator: "Equal"
+        value: "skywalking"
+        effect: "NoSchedule"
       containers:
         - env:
             - name: SW_OAP_ADDRESS
@@ -102,13 +127,6 @@ spec:
             - containerPort: 8080
               name: http
               protocol: TCP
-          resources:
-            limits:
-              cpu: '2'
-              memory: 2Gi
-            requests:
-              cpu: '1'
-              memory: 1Gi
           volumeMounts:
             - mountPath: /etc/localtime
               name: volume-localtime
