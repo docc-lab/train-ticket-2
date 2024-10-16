@@ -44,7 +44,7 @@ public class CancelController {
     @GetMapping(path = "/cancel/{orderId}/{loginId}")
     public HttpEntity cancelTicket(@PathVariable String orderId, @PathVariable String loginId,
                                    @RequestHeader HttpHeaders headers) {
-        requestCounter ++
+        requestCounter ++;
         Response response = null;
 
         CancelController.LOGGER.info("[cancelTicket][Cancel Ticket][info: {}]", orderId);
