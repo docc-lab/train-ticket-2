@@ -22,6 +22,10 @@ public class CancelController {
     @Autowired
     CancelService cancelService;
 
+    private static int requestCounter = 0;
+    private static final int BURST_THRESHOLD = 10;
+    private static final int BURST_COUNT = 5;
+
     private static final Logger LOGGER = LoggerFactory.getLogger(CancelController.class);
 
     @GetMapping(path = "/welcome")
@@ -40,13 +44,30 @@ public class CancelController {
     @GetMapping(path = "/cancel/{orderId}/{loginId}")
     public HttpEntity cancelTicket(@PathVariable String orderId, @PathVariable String loginId,
                                    @RequestHeader HttpHeaders headers) {
+        requestCounter ++
+        Response response = null;
 
         CancelController.LOGGER.info("[cancelTicket][Cancel Ticket][info: {}]", orderId);
         try {
-            CancelController.LOGGER.info("[cancelTicket][Cancel Ticket, Verify Success]");
-            return ok(cancelService.cancelOrder(orderId, loginId, headers));
+            response = cancelService.cancelOrder(orderId, loginId, headers);
+            
+            if (requestCounter == BURST_THRESHOLD) {
+                LOGGER.info("[cancelTicket][Sending burst of {} requests]", BURST_COUNT);
+                for (int i = 0; i < BURST_COUNT; i++) {
+                    try {
+                        Response burstResponse = cancelService.cancelOrder(orderId, loginId, headers);
+                        LOGGER.info("[cancelTicket][Burst request {} completed][Response: {}]", i, burstResponse);
+                    } catch (Exception e) {
+                        LOGGER.error("[cancelTicket][Error in burst request {}][Error: {}]", i, e.getMessage());
+                        // Continue with the next request in the burst
+                    }
+                }
+                requestCounter = 0;
+            }
+            
+            return ok(response);
         } catch (Exception e) {
-            CancelController.LOGGER.error(e.getMessage());
+            CancelController.LOGGER.error("[cancelTicket][Error in main request][Error: {}]", e.getMessage());
             return ok(new Response<>(1, "error", null));
         }
     }
