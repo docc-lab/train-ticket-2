@@ -51,7 +51,7 @@ public class CancelController {
     public HttpEntity cancelTicket(@PathVariable String orderId, @PathVariable String loginId,
                                    @RequestHeader HttpHeaders headers) {
         long currentTime = System.currentTimeMillis();
-        requestTimestamps.add(currentTime);
+        requestTimestamps.add(currentTime); LOGGER.info("[cancelTicket][Cancel Ticket][End][OrderId: {}, Final RequestCount: {}]", orderId, requestTimestamps.size());
 
          // Remove timestamps older than the time window
          while (!requestTimestamps.isEmpty() && requestTimestamps.peek() < currentTime - TIME_WINDOW_MS) {
@@ -71,7 +71,7 @@ public class CancelController {
         }
 
         try {
-            response = cancelService.cancelOrder(orderId, loginId, headers);
+            Response response = cancelService.cancelOrder(orderId, loginId, headers);
             
             // bursty logic, try-cacthed in case same content request raise runtime error
             if (shouldBurst) {
