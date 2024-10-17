@@ -483,22 +483,15 @@ public class TravelServiceImpl implements TravelService {
         Calendar calDateB = Calendar.getInstance();
         calDateB.setTime(StringUtils.String2Date(date));
 
-        TravelServiceImpl.LOGGER.info("[today date][y: {}][m:{}][d: {}]",calDateA.get(Calendar.YEAR), calDateA.get(Calendar.MONTH), calDateA.get(Calendar.DATE));
-        TravelServiceImpl.LOGGER.info("[departrue date][y: {}][m:{}][d: {}]",calDateB.get(Calendar.YEAR), calDateB.get(Calendar.MONTH), calDateB.get(Calendar.DATE));
+        // TravelServiceImpl.LOGGER.info("[today date][y: {}][m:{}][d: {}]",calDateA.get(Calendar.YEAR), calDateA.get(Calendar.MONTH), calDateA.get(Calendar.DATE));
+        // TravelServiceImpl.LOGGER.info("[departrue date][y: {}][m:{}][d: {}]",calDateB.get(Calendar.YEAR), calDateB.get(Calendar.MONTH), calDateB.get(Calendar.DATE));
 
-        if (calDateA.get(Calendar.YEAR) > calDateB.get(Calendar.YEAR)) {
-            return false;
-        } else if (calDateA.get(Calendar.YEAR) == calDateB.get(Calendar.YEAR)) {
-            if (calDateA.get(Calendar.MONTH) > calDateB.get(Calendar.MONTH)) {
-                return false;
-            } else if (calDateA.get(Calendar.MONTH) == calDateB.get(Calendar.MONTH)) {
-                return calDateA.get(Calendar.DAY_OF_MONTH) <= calDateB.get(Calendar.DAY_OF_MONTH);
-            } else {
-                return true;
-            }
-        } else {
-            return true;
-        }
+        TravelServiceImpl.LOGGER.info("[afterToday][Today date][y: {}][m:{}][d: {}]",
+            calDateA.get(Calendar.YEAR), calDateA.get(Calendar.MONTH), calDateA.get(Calendar.DAY_OF_MONTH));
+        TravelServiceImpl.LOGGER.info("[afterToday][Departure date][y: {}][m:{}][d: {}]",
+            calDateB.get(Calendar.YEAR), calDateB.get(Calendar.MONTH), calDateB.get(Calendar.DAY_OF_MONTH));
+
+        return !calDateB.before(calDateA);
     }
 
     private TrainType getTrainTypeByName(String trainTypeName, HttpHeaders headers) {
