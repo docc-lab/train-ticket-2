@@ -470,13 +470,13 @@ public class TravelServiceImpl implements TravelService {
         int minutesEnd = 60 * distanceEnd / trainType.getAverageSpeed();
 
         Calendar calendarStart = Calendar.getInstance();
-        calendarStart.setTime(StringUtils.String2Date(travelDate + " " + trip.getStartTime().split(" ")[1]));
+        calendarStart.setTime(StringUtils.String2Date(departureTime + " " + trip.getStartTime().split(" ")[1]));
         calendarStart.add(Calendar.MINUTE, minutesStart);
         response.setStartTime(StringUtils.Date2String(calendarStart.getTime()));
         TravelServiceImpl.LOGGER.info("[getTickets][Calculate distance][calculate time：{}  time: {}]", minutesStart, calendarStart.getTime());
 
         Calendar calendarEnd = Calendar.getInstance();
-        calendarEnd.setTime(StringUtils.String2Date(travelDate + " " + trip.getStartTime().split(" ")[1]));
+        calendarEnd.setTime(StringUtils.String2Date(departureTime + " " + trip.getStartTime().split(" ")[1]));
         calendarEnd.add(Calendar.MINUTE, minutesEnd);
         response.setEndTime(StringUtils.Date2String(calendarEnd.getTime()));
         TravelServiceImpl.LOGGER.info("[getTickets][Calculate distance][calculate time：{}  time: {}]", minutesEnd, calendarEnd.getTime());
