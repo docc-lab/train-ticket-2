@@ -51,7 +51,7 @@ public class CancelController {
     public HttpEntity cancelTicket(@PathVariable String orderId, @PathVariable String loginId,
                                    @RequestHeader HttpHeaders headers) {
         long currentTime = System.currentTimeMillis();
-        requestTimestamps.add(currentTime)
+        requestTimestamps.add(currentTime);
 
          // Remove timestamps older than the time window
          while (!requestTimestamps.isEmpty() && requestTimestamps.peek() < currentTime - TIME_WINDOW_MS) {
