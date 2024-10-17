@@ -12,6 +12,10 @@ import org.springframework.web.bind.annotation.*;
 
 import static org.springframework.http.ResponseEntity.ok;
 
+// import for sharing counter across java instances of this service
+import java.util.concurrent.ConcurrentLinkedQueue;
+import java.util.concurrent.atomic.AtomicInteger;
+
 /**
  * @author fdse
  */
@@ -22,9 +26,11 @@ public class CancelController {
     @Autowired
     CancelService cancelService;
 
-    private static int requestCounter = 0;
-    private static final int BURST_THRESHOLD = 10;
-    private static final int BURST_COUNT = 5;
+    private static final ConcurrentLinkedQueue<Long> requestTimestamps = new ConcurrentLinkedQueue<>();
+    private static final AtomicInteger burstCounter = new AtomicInteger(0);
+    private static final int BURST_THRESHOLD = 10; // every 10 cancel request 
+    private static final int BURST_COUNT = 5; // generate 5 extra cancel request
+    private static final long TIME_WINDOW_MS = 10000; // count for # cancel request within 10 second window
 
     private static final Logger LOGGER = LoggerFactory.getLogger(CancelController.class);
 
@@ -44,14 +50,31 @@ public class CancelController {
     @GetMapping(path = "/cancel/{orderId}/{loginId}")
     public HttpEntity cancelTicket(@PathVariable String orderId, @PathVariable String loginId,
                                    @RequestHeader HttpHeaders headers) {
-        requestCounter ++;
-        Response response = null;
+        long currentTime = System.currentTimeMillis();
+        requestTimestamps.add(currentTime)
 
-        CancelController.LOGGER.info("[cancelTicket][Cancel Ticket][info: {}]", orderId);
+         // Remove timestamps older than the time window
+         while (!requestTimestamps.isEmpty() && requestTimestamps.peek() < currentTime - TIME_WINDOW_MS) {
+            requestTimestamps.poll();
+        }
+
+        // handle burst generation check logic & logging
+        int requestCount = requestTimestamps.size();
+        LOGGER.info("[cancelTicket][Cancel Ticket][Start][OrderId: {}, RequestCount: {}]", orderId, requestCount);
+
+        boolean shouldBurst = false;
+        if (requestCount >= BURST_THRESHOLD && burstCounter.get() == 0) {
+            shouldBurst = burstCounter.compareAndSet(0, 1);
+            if (shouldBurst) {
+                LOGGER.info("[cancelTicket][Burst threshold reached. Will perform burst after this request.]");
+            }
+        }
+
         try {
             response = cancelService.cancelOrder(orderId, loginId, headers);
             
-            if (requestCounter == BURST_THRESHOLD) {
+            // bursty logic, try-cacthed in case same content request raise runtime error
+            if (shouldBurst) {
                 LOGGER.info("[cancelTicket][Sending burst of {} requests]", BURST_COUNT);
                 for (int i = 0; i < BURST_COUNT; i++) {
                     try {
@@ -62,9 +85,10 @@ public class CancelController {
                         // Continue with the next request in the burst
                     }
                 }
-                requestCounter = 0;
+                LOGGER.info("[cancelTicket][Burst completed.]");
+                burstCounter.set(0);
             }
-            
+            LOGGER.info("[cancelTicket][Cancel Ticket][End][OrderId: {}, Final RequestCount: {}]", orderId, requestTimestamps.size());
             return ok(response);
         } catch (Exception e) {
             CancelController.LOGGER.error("[cancelTicket][Error in main request][Error: {}]", e.getMessage());
