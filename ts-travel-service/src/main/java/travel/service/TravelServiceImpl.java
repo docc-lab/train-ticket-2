@@ -305,18 +305,43 @@ public class TravelServiceImpl implements TravelService {
         } else {
             String startPlaceName = gtdi.getFrom();
             String endPlaceName = gtdi.getTo();
-            TripResponse tripResponse = getTickets(trip, null, startPlaceName, endPlaceName, gtdi.getTravelDate(), headers);
+            String travelDate = gtdi.getTravelDate();
+            
+            // Create a copy of the trip with updated travel date
+            Trip updatedTrip = createTripWithNewDate(trip, travelDate);
+            
+            TripResponse tripResponse = getTickets(updatedTrip, null, startPlaceName, endPlaceName, travelDate, headers);
             if (tripResponse == null) {
                 gtdr.setTripResponse(null);
                 gtdr.setTrip(null);
-                TravelServiceImpl.LOGGER.warn("[getTripAllDetailInfo][Get trip detail error][Tickets not found][start: {},end: {},time: {}]", startPlaceName, endPlaceName, gtdi.getTravelDate());
+                TravelServiceImpl.LOGGER.warn("[getTripAllDetailInfo][Get trip detail error][Tickets not found][start: {},end: {},time: {}]", startPlaceName, endPlaceName, travelDate);
                 return new Response<>(0, "getTickets failed", gtdr);
             } else {
                 gtdr.setTripResponse(tripResponse);
-                gtdr.setTrip(repository.findByTripId(new TripId(gtdi.getTripId())));
+                gtdr.setTrip(updatedTrip);
             }
         }
         return new Response<>(1, success, gtdr);
+    }
+
+    private Trip createTripWithNewDate(Trip originalTrip, String newDate) {
+        Trip updatedTrip = new Trip(
+            originalTrip.getTripId(),
+            originalTrip.getTrainTypeName(),
+            originalTrip.getStartStationName(),
+            originalTrip.getStationsName(),
+            originalTrip.getTerminalStationName(),
+            updateDateOnly(originalTrip.getStartTime(), newDate),
+            updateDateOnly(originalTrip.getEndTime(), newDate)
+        );
+        updatedTrip.setRouteId(originalTrip.getRouteId());
+        return updatedTrip;
+    }
+    
+    private String updateDateOnly(String originalDateTime, String newDate) {
+        // Assuming the date format is "yyyy-MM-dd HH:mm:ss"
+        String[] dateTimeParts = originalDateTime.split(" ");
+        return newDate + " " + dateTimeParts[1];
     }
 
     private List<TripResponse> getTicketsByBatch(List<Trip> trips, String startPlaceName, String endPlaceName, String departureTime, HttpHeaders headers) {
@@ -445,13 +470,13 @@ public class TravelServiceImpl implements TravelService {
         int minutesEnd = 60 * distanceEnd / trainType.getAverageSpeed();
 
         Calendar calendarStart = Calendar.getInstance();
-        calendarStart.setTime(StringUtils.String2Date(trip.getStartTime()));
+        calendarStart.setTime(StringUtils.String2Date(travelDate + " " + trip.getStartTime().split(" ")[1]));
         calendarStart.add(Calendar.MINUTE, minutesStart);
         response.setStartTime(StringUtils.Date2String(calendarStart.getTime()));
         TravelServiceImpl.LOGGER.info("[getTickets][Calculate distance][calculate time：{}  time: {}]", minutesStart, calendarStart.getTime());
 
         Calendar calendarEnd = Calendar.getInstance();
-        calendarEnd.setTime(StringUtils.String2Date(trip.getStartTime()));
+        calendarEnd.setTime(StringUtils.String2Date(travelDate + " " + trip.getStartTime().split(" ")[1]));
         calendarEnd.add(Calendar.MINUTE, minutesEnd);
         response.setEndTime(StringUtils.Date2String(calendarEnd.getTime()));
         TravelServiceImpl.LOGGER.info("[getTickets][Calculate distance][calculate time：{}  time: {}]", minutesEnd, calendarEnd.getTime());
