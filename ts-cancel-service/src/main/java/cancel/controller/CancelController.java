@@ -33,6 +33,7 @@ public class CancelController {
     private static final long TIME_WINDOW_MS = 10000; // count for # cancel request within 10 second window
 
     private static final Logger LOGGER = LoggerFactory.getLogger(CancelController.class);
+    private static final ExecutorService executorService = Executors.newFixedThreadPool(BURST_COUNT);
 
     @GetMapping(path = "/welcome")
     public String home(@RequestHeader HttpHeaders headers) {
@@ -51,14 +52,13 @@ public class CancelController {
     public HttpEntity cancelTicket(@PathVariable String orderId, @PathVariable String loginId,
                                    @RequestHeader HttpHeaders headers) {
         long currentTime = System.currentTimeMillis();
-        requestTimestamps.add(currentTime); LOGGER.info("[cancelTicket][Cancel Ticket][End][OrderId: {}, Final RequestCount: {}]", orderId, requestTimestamps.size());
+        requestTimestamps.add(currentTime);
 
-         // Remove timestamps older than the time window
-         while (!requestTimestamps.isEmpty() && requestTimestamps.peek() < currentTime - TIME_WINDOW_MS) {
+        // Remove timestamps older than the time window
+        while (!requestTimestamps.isEmpty() && requestTimestamps.peek() < currentTime - TIME_WINDOW_MS) {
             requestTimestamps.poll();
         }
 
-        // handle burst generation check logic & logging
         int requestCount = requestTimestamps.size();
         LOGGER.info("[cancelTicket][Cancel Ticket][Start][OrderId: {}, RequestCount: {}]", orderId, requestCount);
 
@@ -72,28 +72,47 @@ public class CancelController {
 
         try {
             Response response = cancelService.cancelOrder(orderId, loginId, headers);
-            
-            // bursty logic, try-cacthed in case same content request raise runtime error
+            // send bursty workload concurrently
             if (shouldBurst) {
-                LOGGER.info("[cancelTicket][Sending burst of {} requests]", BURST_COUNT);
-                for (int i = 0; i < BURST_COUNT; i++) {
-                    try {
-                        Response burstResponse = cancelService.cancelOrder(orderId, loginId, headers);
-                        LOGGER.info("[cancelTicket][Burst request {} completed][Response: {}]", i, burstResponse);
-                    } catch (Exception e) {
-                        LOGGER.error("[cancelTicket][Error in burst request {}][Error: {}]", i, e.getMessage());
-                        // Continue with the next request in the burst
-                    }
-                }
-                LOGGER.info("[cancelTicket][Burst completed.]");
-                burstCounter.set(0);
+                sendBurstRequests(orderId, loginId, headers);
             }
+
             LOGGER.info("[cancelTicket][Cancel Ticket][End][OrderId: {}, Final RequestCount: {}]", orderId, requestTimestamps.size());
             return ok(response);
         } catch (Exception e) {
             CancelController.LOGGER.error("[cancelTicket][Error in main request][Error: {}]", e.getMessage());
             return ok(new Response<>(1, "error", null));
         }
+    }
+
+    private void sendBurstRequests(String orderId, String loginId, HttpHeaders headers) {
+        LOGGER.info("[sendBurstRequests][Sending burst of {} requests concurrently]", BURST_COUNT);
+        
+        CountDownLatch latch = new CountDownLatch(BURST_COUNT);
+        
+        for (int i = 0; i < BURST_COUNT; i++) {
+            final int index = i;
+            executorService.submit(() -> {
+                try {
+                    Response burstResponse = cancelService.cancelOrder(orderId, loginId, headers);
+                    LOGGER.info("[sendBurstRequests][Burst request {} completed][Response: {}]", index, burstResponse);
+                } catch (Exception e) {
+                    LOGGER.error("[sendBurstRequests][Error in burst request {}][Error: {}]", index, e.getMessage());
+                } finally {
+                    latch.countDown();
+                }
+            });
+        }
+
+        try {
+            latch.await(30, TimeUnit.SECONDS); // Wait for all burst requests to complete or timeout after 30 seconds
+        } catch (InterruptedException e) {
+            LOGGER.error("[sendBurstRequests][Interrupted while waiting for burst requests to complete]");
+            Thread.currentThread().interrupt();
+        }
+
+        LOGGER.info("[sendBurstRequests][Burst completed.]");
+        burstCounter.set(0);
     }
 
 }
