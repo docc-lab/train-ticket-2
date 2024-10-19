@@ -253,39 +253,38 @@ public class OrderServiceImpl implements OrderService {
     }
 
     @Override
-    public Response cancelOrder(String orderId, int status, HttpHeaders headers) {
-        Optional<Order> orderOpt = orderRepository.findById(orderId);
-
-        if (!orderOpt.isPresent()) {
-            LOGGER.warn("[cancelOrder][Order not found][OrderId: {}]", orderId);
-            return new Response<>(0, "Order not found", null);
-        }
-
-        Order order = orderOpt.get();
-
-        if (order.getStatus() == OrderStatus.PAID.getCode() || order.getStatus() == OrderStatus.CHANGE.getCode()) {
-            // Cancel the order if it's in a cancellable state
-            order.setStatus(OrderStatus.CANCEL.getCode());
-            orderRepository.save(order);
-            enqueueOrderId(orderId);
-            LOGGER.info("[cancelOrder][Order cancelled][OrderId: {}]", orderId);
-            return new Response<>(1, "Order cancelled successfully", order);
-        } else if (!isOrderIdInQueue(orderId)) {
-            // Order is not cancellable and not in queue
-            enqueueOrderId(orderId);
-            LOGGER.warn("[cancelOrder][Order not in cancellable state][OrderId: {}]", orderId);
-            return new Response<>(0, "Order is not in a cancellable state", null);
+    public Response cancelOrder(String accountId, String orderId, HttpHeaders headers) {
+        Optional<Order> op = orderRepository.findById(orderId);
+        if (!op.isPresent()) {
+            OrderServiceImpl.LOGGER.error("[cancelOrder][Cancel Order Fail][Order not found][OrderId: {}]", orderId);
+            return new Response<>(0, orderNotFound, null);
         } else {
-            // Order is not cancellable but is in queue, cancel a random cancellable order
-            Order randomOrder = findRandomCancellableOrder();
-            if (randomOrder != null) {
-                randomOrder.setStatus(OrderStatus.CANCEL.getCode());
-                orderRepository.save(randomOrder);
-                LOGGER.info("[cancelOrder][Random order cancelled][OrderId: {}]", randomOrder.getId());
-                return new Response<>(1, "Random order cancelled", randomOrder);
+            Order order = op.get();
+            
+            if (order.getStatus() == OrderStatus.PAID.getCode() || order.getStatus() == OrderStatus.CHANGE.getCode()) {
+                // Cancel the order if it's in a cancellable state
+                order.setStatus(OrderStatus.CANCEL.getCode());
+                orderRepository.save(order);
+                enqueueOrderId(orderId);
+                OrderServiceImpl.LOGGER.info("[cancelOrder][Cancel Order Success][OrderId: {}]", orderId);
+                return new Response<>(1, success, order);
+            } else if (!isOrderIdInQueue(orderId)) {
+                // Order is not cancellable and not in queue
+                enqueueOrderId(orderId);
+                OrderServiceImpl.LOGGER.warn("[cancelOrder][Order not in cancellable state][OrderId: {}]", orderId);
+                return new Response<>(0, "Order is not in a cancellable state", null);
             } else {
-                LOGGER.warn("[cancelOrder][No cancellable orders found]");
-                return new Response<>(0, "No cancellable orders found", null);
+                // Order is not cancellable but is in queue, cancel a random cancellable order
+                Order randomOrder = findRandomCancellableOrder();
+                if (randomOrder != null) {
+                    randomOrder.setStatus(OrderStatus.CANCEL.getCode());
+                    orderRepository.save(randomOrder);
+                    OrderServiceImpl.LOGGER.info("[cancelOrder][Random order cancelled][OrderId: {}]", randomOrder.getId());
+                    return new Response<>(1, "Random order cancelled", randomOrder);
+                } else {
+                    OrderServiceImpl.LOGGER.warn("[cancelOrder][No cancellable orders found]");
+                    return new Response<>(0, "No cancellable orders found", null);
+                }
             }
         }
     }
@@ -297,11 +296,11 @@ public class OrderServiceImpl implements OrderService {
         }
         recentOrderIds.offer(orderId);
     }
-
+    
     private boolean isOrderIdInQueue(String orderId) {
         return recentOrderIds.contains(orderId);
     }
-
+    
     private Order findRandomCancellableOrder() {
         List<Order> cancellableOrders = orderRepository.findByStatusIn(
             Arrays.asList(OrderStatus.PAID.getCode(), OrderStatus.CHANGE.getCode())
@@ -312,6 +311,7 @@ public class OrderServiceImpl implements OrderService {
         }
         return null;
     }
+
 
     @Override
     public Response queryAlreadySoldOrders(Date travelDate, String trainNumber, HttpHeaders headers) {
