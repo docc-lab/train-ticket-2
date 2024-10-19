@@ -68,6 +68,13 @@ mysql:
   ## Configure resource requests and limits
   ## ref: http://kubernetes.io/docs/user-guide/compute-resources/
   ##
+  resources: 
+    requests:
+      memory: 256Mi
+      cpu: 100m
+    limits:
+      memory: 1Gi
+      cpu: 500m
 
 xenon:
   image: radondb/xenon
@@ -96,7 +103,13 @@ xenon:
     successThreshold: 1
     failureThreshold: 3
 
-  resources: {}
+  resources: 
+    requests:
+      memory: 2Gi
+      cpu: 500m
+    limits:
+      memory: 4Gi
+      cpu: 1000m
 
 metrics:
   enabled: false
@@ -173,7 +186,7 @@ persistence:
   # storageClass: "-"
   accessModes:
   - ReadWriteOnce
-  size: 1Gi
+  size: 4Gi
   annotations: {}
   reclaimPolicy: ""
 
