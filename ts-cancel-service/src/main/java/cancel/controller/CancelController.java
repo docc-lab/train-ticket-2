@@ -7,14 +7,15 @@ import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-import static org.springframework.http.ResponseEntity.ok;
-
-// import for sharing counter across java instances of this service
-import java.util.concurrent.ConcurrentLinkedQueue;
+import javax.annotation.PreDestroy;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+
+import static org.springframework.http.ResponseEntity.ok;
 
 /**
  * @author fdse
@@ -26,11 +27,9 @@ public class CancelController {
     @Autowired
     CancelService cancelService;
 
-    private static final ConcurrentLinkedQueue<Long> requestTimestamps = new ConcurrentLinkedQueue<>();
-    private static final AtomicInteger burstCounter = new AtomicInteger(0);
-    private static final int BURST_THRESHOLD = 10; // every 10 cancel request 
-    private static final int BURST_COUNT = 5; // generate 5 extra cancel request
-    private static final long TIME_WINDOW_MS = 10000; // count for # cancel request within 10 second window
+    private static final AtomicInteger requestCounter = new AtomicInteger(0);
+    private static final int BURST_THRESHOLD = 10; // Trigger burst every 10 cancel requests
+    private static final int BURST_COUNT = 5; // Generate 5 extra cancel requests
 
     private static final Logger LOGGER = LoggerFactory.getLogger(CancelController.class);
     private static final ExecutorService executorService = Executors.newFixedThreadPool(BURST_COUNT);
@@ -43,7 +42,7 @@ public class CancelController {
     @CrossOrigin(origins = "*")
     @GetMapping(path = "/cancel/refound/{orderId}")
     public HttpEntity calculate(@PathVariable String orderId, @RequestHeader HttpHeaders headers) {
-        CancelController.LOGGER.info("[calculate][Calculate Cancel Refund][OrderId: {}]", orderId);
+        LOGGER.info("[calculate][Calculate Cancel Refund][OrderId: {}]", orderId);
         return ok(cancelService.calculateRefund(orderId, headers));
     }
 
@@ -51,44 +50,26 @@ public class CancelController {
     @GetMapping(path = "/cancel/{orderId}/{loginId}")
     public HttpEntity cancelTicket(@PathVariable String orderId, @PathVariable String loginId,
                                    @RequestHeader HttpHeaders headers) {
-        long currentTime = System.currentTimeMillis();
-        requestTimestamps.add(currentTime);
-
-        // Remove timestamps older than the time window
-        while (!requestTimestamps.isEmpty() && requestTimestamps.peek() < currentTime - TIME_WINDOW_MS) {
-            requestTimestamps.poll();
-        }
-
-        int requestCount = requestTimestamps.size();
-        LOGGER.info("[cancelTicket][Cancel Ticket][Start][OrderId: {}, RequestCount: {}]", orderId, requestCount);
-
-        boolean shouldBurst = false;
-        if (requestCount >= BURST_THRESHOLD && burstCounter.get() == 0) {
-            shouldBurst = burstCounter.compareAndSet(0, 1);
-            if (shouldBurst) {
-                LOGGER.info("[cancelTicket][Burst threshold reached. Will perform burst after this request.]");
-            }
-        }
+        int currentCount = requestCounter.incrementAndGet();
+        LOGGER.info("[cancelTicket][Cancel Ticket][Start][OrderId: {}, RequestCount: {}]", orderId, currentCount);
 
         try {
             Response response = cancelService.cancelOrder(orderId, loginId, headers);
-            // send bursty workload concurrently
-            if (shouldBurst) {
+            
+            if (currentCount % BURST_THRESHOLD == 0) {
                 sendBurstRequests(orderId, loginId, headers);
             }
 
-            LOGGER.info("[cancelTicket][Cancel Ticket][End][OrderId: {}, Final RequestCount: {}]", orderId, requestTimestamps.size());
+            LOGGER.info("[cancelTicket][Cancel Ticket][End][OrderId: {}, RequestCount: {}]", orderId, currentCount);
             return ok(response);
         } catch (Exception e) {
-            CancelController.LOGGER.error("[cancelTicket][Error in main request][Error: {}]", e.getMessage());
+            LOGGER.error("[cancelTicket][Error in main request][Error: {}]", e.getMessage());
             return ok(new Response<>(1, "error", null));
         }
     }
 
     private void sendBurstRequests(String orderId, String loginId, HttpHeaders headers) {
         LOGGER.info("[sendBurstRequests][Sending burst of {} requests concurrently]", BURST_COUNT);
-        
-        CountDownLatch latch = new CountDownLatch(BURST_COUNT);
         
         for (int i = 0; i < BURST_COUNT; i++) {
             final int index = i;
@@ -98,21 +79,22 @@ public class CancelController {
                     LOGGER.info("[sendBurstRequests][Burst request {} completed][Response: {}]", index, burstResponse);
                 } catch (Exception e) {
                     LOGGER.error("[sendBurstRequests][Error in burst request {}][Error: {}]", index, e.getMessage());
-                } finally {
-                    latch.countDown();
                 }
             });
         }
 
-        try {
-            latch.await(30, TimeUnit.SECONDS); // Wait for all burst requests to complete or timeout after 30 seconds
-        } catch (InterruptedException e) {
-            LOGGER.error("[sendBurstRequests][Interrupted while waiting for burst requests to complete]");
-            Thread.currentThread().interrupt();
-        }
-
-        LOGGER.info("[sendBurstRequests][Burst completed.]");
-        burstCounter.set(0);
+        LOGGER.info("[sendBurstRequests][Burst requests submitted.]");
     }
 
+    @PreDestroy
+    public void shutdownExecutorService() {
+        executorService.shutdown();
+        try {
+            if (!executorService.awaitTermination(30, TimeUnit.SECONDS)) {
+                executorService.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executorService.shutdownNow();
+        }
+    }
 }
