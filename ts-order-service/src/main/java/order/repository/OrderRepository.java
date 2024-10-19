@@ -27,4 +27,7 @@ public interface OrderRepository extends JpaRepository<Order, String> {
 
     @Override
     void deleteById(String id);
+
+    // Find orders by status
+    List<Order> findByStatusIn(List<Integer> statuses);
 }
