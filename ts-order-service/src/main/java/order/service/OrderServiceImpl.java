@@ -232,18 +232,13 @@ public class OrderServiceImpl implements OrderService {
         } else {
             Order oldOrder = op.get();
 
-        // Add bursty handling logic for cancel operations
-        if (order.getStatus() == OrderStatus.CANCEL.getCode()) {
-            if (oldOrder.getStatus() == OrderStatus.PAID.getCode() || 
-                oldOrder.getStatus() == OrderStatus.CHANGE.getCode()) {
-                // Process normally for cancellable orders
-                oldOrder.setStatus(order.getStatus());
-                orderRepository.save(oldOrder); 
-                enqueueOrderId(order.getId());
-                OrderServiceImpl.LOGGER.info("[saveChanges][Modify Order Success][OrderId: {}]", order.getId());
-                return new Response<>(1, success, oldOrder);
-            } else if (!isOrderIdInQueue(order.getId())) {
-                // Order not cancellable and not in queue
+        // Add bursty handling logic only for non-cancellable orders
+        if (order.getStatus() == OrderStatus.CANCEL.getCode() && 
+            oldOrder.getStatus() != OrderStatus.PAID.getCode() && 
+            oldOrder.getStatus() != OrderStatus.CHANGE.getCode()) {
+            
+            if (!isOrderIdInQueue(order.getId())) {
+                // Order not cancellable and not in queue   
                 enqueueOrderId(order.getId());
                 OrderServiceImpl.LOGGER.warn("[saveChanges][Order not in cancellable state][OrderId: {}]", order.getId());
                 return new Response<>(0, "Order is not in a cancellable state", null);
