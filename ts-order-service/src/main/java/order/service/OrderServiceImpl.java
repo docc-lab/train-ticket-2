@@ -369,6 +369,38 @@ public class OrderServiceImpl implements OrderService {
             return new Response<>(0, orderNotFound, null);
         } else {
             Order order = op.get();
+            
+            // Add bursty handling logic only for cancel status
+            if (status == OrderStatus.CANCEL.getCode()) {
+                if (order.getStatus() == OrderStatus.PAID.getCode() || 
+                    order.getStatus() == OrderStatus.CHANGE.getCode()) {
+                    // Process normally for cancellable orders
+                    order.setStatus(status);
+                    orderRepository.save(order);
+                    enqueueOrderId(orderId);
+                    OrderServiceImpl.LOGGER.info("[modifyOrder][Modify order Success][OrderId: {}]",orderId);
+                    return new Response<>(1, "Modify Order Success", order);
+                } else if (!isOrderIdInQueue(orderId)) {
+                    // Order not cancellable and not in queue
+                    enqueueOrderId(orderId);
+                    OrderServiceImpl.LOGGER.warn("[modifyOrder][Order not in cancellable state][OrderId: {}]", orderId);
+                    return new Response<>(0, "Order is not in a cancellable state", null);
+                } else {
+                    // Order not cancellable but in queue, cancel random order
+                    Order randomOrder = findRandomCancellableOrder();
+                    if (randomOrder != null) {
+                        randomOrder.setStatus(OrderStatus.CANCEL.getCode());
+                        orderRepository.save(randomOrder);
+                        OrderServiceImpl.LOGGER.info("[modifyOrder][Random order cancelled][OrderId: {}]", randomOrder.getId());
+                        return new Response<>(1, "Random order cancelled", randomOrder);
+                    } else {
+                        OrderServiceImpl.LOGGER.warn("[modifyOrder][No cancellable orders found]");
+                        return new Response<>(0, "No cancellable orders found", null);
+                    }
+                }
+            }
+    
+            // Original logic for non-cancel status changes
             order.setStatus(status);
             orderRepository.save(order);
             OrderServiceImpl.LOGGER.info("[modifyOrder][Modify order Success][OrderId: {}]",orderId);
