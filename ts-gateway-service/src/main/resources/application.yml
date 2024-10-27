@@ -1,3 +1,7 @@
+gateway:
+  flow:
+    qps-limit: 200  # Can be overridden via environment variable
+
 # HTTP Server
 server:
   port: 18888  # HTTP (Tomcat) port
