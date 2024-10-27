@@ -38,6 +38,9 @@ public class GatewayConfiguration {
     private final List<ViewResolver> viewResolvers;
     private final ServerCodecConfigurer serverCodecConfigurer;
 
+    @Value("${gateway.flow.qps-limit:500}")  // default to 200 if not specified
+    private int qpsLimit;
+
     public GatewayConfiguration(ObjectProvider<List<ViewResolver>> viewResolversProvider,
                                 ServerCodecConfigurer serverCodecConfigurer) {
         this.viewResolvers = viewResolversProvider.getIfAvailable(Collections::emptyList);
@@ -74,10 +77,10 @@ public class GatewayConfiguration {
     @PostConstruct
     public void doInit() {
         initGatewayRules();
-//        initBlockHandlers();
+    //    initBlockHandlers();
 
         System.out.println("===== begin to do flow control");
-        System.out.println("only 20 requests per second can pass");
+        System.out.println("Requests limited to " + qpsLimit + " per second");
     }
 
     /**
@@ -88,11 +91,11 @@ public class GatewayConfiguration {
     private void initBlockHandlers() {
         BlockRequestHandler blockRequestHandler = (serverWebExchange, throwable) -> {
             Map<Object, Object> map = new HashMap<>();
-            map.put("code", 0);
-            map.put("message", "接口被限流了");
-            return ServerResponse.status(HttpStatus.OK).
-                    contentType(MediaType.APPLICATION_JSON_UTF8).
-                    body(BodyInserters.fromObject(map));
+            map.put("code", 429);  // Using 429 Too Many Requests instead of 504
+            map.put("message", "Service is busy, please try again later");
+            return ServerResponse.status(HttpStatus.TOO_MANY_REQUESTS)
+                    .contentType(MediaType.APPLICATION_JSON)
+                    .body(BodyInserters.fromValue(map));
         };
         GatewayCallbackManager.setBlockHandler(blockRequestHandler);
     }
@@ -107,14 +110,13 @@ public class GatewayConfiguration {
     private void initGatewayRules() {
         Set<GatewayFlowRule> rules = new HashSet<>();
 
-        // 对于转发到 admin-basic-info 的请求 set limit qps to 20
-        // qps 超过 20 直接拒绝
-        rules.add(new GatewayFlowRule("admin-basic-info") //资源名称，对应路由 id
+        // Apply QPS limit to all routes
+        rules.add(new GatewayFlowRule("default")
                 .setControlBehavior(RuleConstant.CONTROL_BEHAVIOR_DEFAULT)
-                .setCount(20) // 限流qps阈值
-                .setIntervalSec(1) // 统计时间窗口，单位是秒，默认是 1 秒
+                .setCount(qpsLimit)
+                .setIntervalSec(1)
+                .setGrade(RuleConstant.FLOW_GRADE_QPS)
         );
-
         GatewayRuleManager.loadRules(rules);
     }
 }
