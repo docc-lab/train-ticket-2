@@ -328,14 +328,14 @@ public class OrderServiceImpl implements OrderService {
         List<Order> cancellableOrders = orderRepository.findByStatusIn(
             Arrays.asList(OrderStatus.NOTPAID.getCode(), OrderStatus.CHANGE.getCode())
         );
-
-        // find paid order then if no paid orders
+    
+        // if no unpaid orders found, look for paid orders
         if (cancellableOrders.isEmpty()) {
-            List<Order> cancellableOrders = orderRepository.findByStatusIn(
-            Arrays.asList(OrderStatus.PAID.getCode(), OrderStatus.CHANGE.getCode())
+            cancellableOrders = orderRepository.findByStatusIn(
+                Arrays.asList(OrderStatus.PAID.getCode(), OrderStatus.CHANGE.getCode())
             );
         }
-
+    
         if (!cancellableOrders.isEmpty()) {
             int randomIndex = new Random().nextInt(cancellableOrders.size());
             return cancellableOrders.get(randomIndex);
