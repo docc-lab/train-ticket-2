@@ -39,7 +39,7 @@ public class OrderServiceImpl implements OrderService {
 
     // FIFO queue for handling bursty cancel reqs
     private final Queue<String> recentOrderIds = new LinkedList<>();
-    private static final int QUEUE_SIZE = 50;
+    private static final int QUEUE_SIZE = 100;
 
     @Autowired
     private DiscoveryClient discoveryClient;
@@ -231,65 +231,27 @@ public class OrderServiceImpl implements OrderService {
             return new Response<>(0, orderNotFound, null);
         } else {
             Order oldOrder = op.get();
-
+    
             // Add bursty handling logic
-            if (!isOrderIdInQueue(order.getId())) {     // check if cur order a bursty load
-                // Order in queue, cancel random order
+            if (!isOrderIdInQueue(order.getId())) {     
+                // Order not in queue, handle potential bursty load
                 Order randomOrder = findRandomCancellableOrder();
                 if (randomOrder != null) {
-                    randomOrder.setAccountId(randomOrder.getAccountId());
-                    randomOrder.setBoughtDate(randomOrder.getBoughtDate());
-                    randomOrder.setTravelDate(randomOrder.getTravelDate());
-                    randomOrder.setTravelTime(randomOrder.getTravelTime());
-                    randomOrder.setCoachNumber(randomOrder.getCoachNumber());
-                    randomOrder.setSeatClass(randomOrder.getSeatClass());
-                    randomOrder.setSeatNumber(randomOrder.getSeatNumber());
-                    randomOrder.setFrom(randomOrder.getFrom());
-                    randomOrder.setTo(randomOrder.getTo());
+                    // Update the random order's status to cancelled
                     randomOrder.setStatus(OrderStatus.CANCEL.getCode());
-                    randomOrder.setTrainNumber(randomOrder.getTrainNumber());
-                    randomOrder.setPrice(randomOrder.getPrice());
-                    randomOrder.setContactsName(randomOrder.getContactsName());
-                    randomOrder.setContactsDocumentNumber(randomOrder.getContactsDocumentNumber());
-                    randomOrder.setDocumentType(randomOrder.getDocumentType());
                     orderRepository.save(randomOrder);
-
-                    // randomOrder.setStatus(OrderStatus.CANCEL.getCode());
-                    // orderRepository.save(randomOrder);
                     OrderServiceImpl.LOGGER.info("[saveChanges][Random order cancelled][OrderId: {}]", randomOrder.getId());
                     return new Response<>(1, "Bursty load: random order cancelled", randomOrder);
                 } else {
-                    OrderServiceImpl.LOGGER.warn("[saveChanges][Random order is not cancellable]");
+                    OrderServiceImpl.LOGGER.warn("[saveChanges][No cancellable orders found]");
                     return new Response<>(0, "Bursty load: no cancellable orders found", null);
                 }
-
-            // enqueue cur order to keep track of bursty load
+            }
+    
+            // Enqueue current order to track bursty load
             enqueueOrderId(order.getId());
-
-            // if (oldOrder.getStatus() == OrderStatus.CANCEL.getCode() && 
-            //     oldOrder.getStatus() != OrderStatus.PAID.getCode() && 
-            //     oldOrder.getStatus() != OrderStatus.CHANGE.getCode()) {
-                
-            //     if (!isOrderIdInQueue(order.getId())) {
-            //         // Order not cancellable and not in queue   
-            //         enqueueOrderId(order.getId());
-            //         OrderServiceImpl.LOGGER.warn("[saveChanges][Order not in cancellable state][OrderId: {}]", order.getId());
-            //         return new Response<>(0, "Order is not in a cancellable state", null);
-            //     } else {
-            //         // Order not cancellable but in queue, cancel random order
-            //         Order randomOrder = findRandomCancellableOrder();
-            //         if (randomOrder != null) {
-            //             randomOrder.setStatus(OrderStatus.CANCEL.getCode());
-            //             orderRepository.save(randomOrder);
-            //             OrderServiceImpl.LOGGER.info("[saveChanges][Random order cancelled][OrderId: {}]", randomOrder.getId());
-            //             return new Response<>(1, "Random order cancelled", randomOrder);
-            //         } else {
-            //             OrderServiceImpl.LOGGER.warn("[saveChanges][No cancellable orders found]");
-            //             return new Response<>(0, "No cancellable orders found", null);
-            //         }
-            //     }
-            // }
-
+    
+            // Update the original order
             oldOrder.setAccountId(order.getAccountId());
             oldOrder.setBoughtDate(order.getBoughtDate());
             oldOrder.setTravelDate(order.getTravelDate());
@@ -306,6 +268,7 @@ public class OrderServiceImpl implements OrderService {
             oldOrder.setContactsDocumentNumber(order.getContactsDocumentNumber());
             oldOrder.setDocumentType(order.getDocumentType());
             orderRepository.save(oldOrder);
+            
             OrderServiceImpl.LOGGER.info("[saveChanges][Modify Order Success][OrderId: {}]", order.getId());
             return new Response<>(1, success, oldOrder);
         }
