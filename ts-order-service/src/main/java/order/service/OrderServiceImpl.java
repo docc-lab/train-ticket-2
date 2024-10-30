@@ -233,8 +233,8 @@ public class OrderServiceImpl implements OrderService {
             Order oldOrder = op.get();
     
             // Add bursty handling logic
-            if (!isOrderIdInQueue(order.getId())) {     
-                // Order not in queue, handle potential bursty load
+            if (isOrderIdInQueue(order.getId())) {     
+                // find a random order for bursty load
                 Order randomOrder = findRandomCancellableOrder();
                 if (randomOrder != null) {
                     // Update the random order's status to cancelled
