@@ -35,9 +35,19 @@ public class CancelController {
     private static final int BURST_DURATION_SECONDS = 10; // Duration of burst in seconds
     private static final int THREAD_POOL_SIZE = BURST_REQUESTS_PER_SEC * 2; // Ensure enough threads
 
+    private final ExecutorService executorService;
+    private final ScheduledExecutorService schedulerService;
+
+    @Autowired
+    public CancelController(CancelService cancelService) {
+        this.cancelService = cancelService;
+        this.executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
+        this.schedulerService = Executors.newScheduledThreadPool(1);
+    }
+
     private static final Logger LOGGER = LoggerFactory.getLogger(CancelController.class);
-    private static final ExecutorService executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
-    private static final ScheduledExecutorService schedulerService = Executors.newScheduledThreadPool(1);
+    // private static final ExecutorService executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
+    // private static final ScheduledExecutorService schedulerService = Executors.newScheduledThreadPool(1);
 
     @GetMapping(path = "/welcome")
     public String home(@RequestHeader HttpHeaders headers) {
