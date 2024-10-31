@@ -26,33 +26,28 @@ import static org.springframework.http.ResponseEntity.ok;
 @RequestMapping("/api/v1/cancelservice")
 public class CancelController {
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(CancelController.class);
-    
-    // Constants
-    private static final int BURST_REQUESTS_PER_SEC = 5;
+    @Autowired
+    private CancelService cancelService;
+
+    private static final AtomicInteger requestCounter = new AtomicInteger(0);
     private static final int BURST_THRESHOLD = 10;
+    private static final int BURST_REQUESTS_PER_SEC = 5;
     private static final int BURST_DURATION_SECONDS = 10;
     private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
 
-    // Instance fields
-    private final CancelService cancelService;
+    private static final Logger LOGGER = LoggerFactory.getLogger(CancelController.class);
     private final ExecutorService executorService;
     private final ScheduledExecutorService schedulerService;
-    private final AtomicInteger requestCounter;
 
     @Autowired
     public CancelController(CancelService cancelService) {
         LOGGER.info("Initializing CancelController with THREAD_POOL_SIZE: {}", THREAD_POOL_SIZE);
-        
         this.cancelService = cancelService;
         this.executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
         this.schedulerService = Executors.newScheduledThreadPool(1);
-        this.requestCounter = new AtomicInteger(0);
-        
         LOGGER.info("CancelController initialization completed");
     }
 
-    private static final Logger LOGGER = LoggerFactory.getLogger(CancelController.class);
     // private static final ExecutorService executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
     // private static final ScheduledExecutorService schedulerService = Executors.newScheduledThreadPool(1);
 
