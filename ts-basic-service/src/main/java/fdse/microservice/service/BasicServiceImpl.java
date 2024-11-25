@@ -147,10 +147,10 @@ public class BasicServiceImpl implements BasicService {
 
             // Check if it's time for a new retry Wave
             long currentTime = Instant.now().getEpochSecond();
-            long lastWave = lastRetryTime.get();
+            long lastWave = lastFanoutTime.get();
 
             if (currentTime - lastWave >= RETRY_PERIOD_SECONDS && 
-                lastRetryTime.compareAndSet(lastWave, currentTime)) {
+                lastFanoutTime.compareAndSet(lastWave, currentTime)) {
                 
                 LOGGER.info("[queryForTravel][Triggering retries after {} seconds]", 
                            currentTime - lastWave);
