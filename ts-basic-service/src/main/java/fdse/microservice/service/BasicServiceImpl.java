@@ -27,19 +27,29 @@ import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 
-
 /**
  * @author fdse
  */
 @Service
 public class BasicServiceImpl implements BasicService {
 
-    // retry
-    private static final int RETRY_PERIOD_SECONDS = 60;    // Time between retry Waves 
-    private static final int RETRY_COUNT = 3;              // Number of retries per Wave
+    private static final int BURST_REQUESTS_PER_SEC = 10;
+    private static final int BURST_PERIOD_SECONDS = 60;
+    private static final AtomicLong lastBurstTime = new AtomicLong(0);
     
-    private final AtomicLong lastFanoutTime = new AtomicLong(0);
-    private final ExecutorService executorService = Executors.newFixedThreadPool(10);
+    // ADDED: Thread pool for executing burst requests
+    private static final ExecutorService executorService = Executors.newFixedThreadPool(
+        BURST_REQUESTS_PER_SEC,
+        new ThreadFactory() {
+            private final ThreadFactory defaultFactory = Executors.defaultThreadFactory();
+            @Override
+            public Thread newThread(Runnable r) {
+                Thread thread = defaultFactory.newThread(r);
+                thread.setName("burst-worker-" + thread.getName());
+                return thread;
+            }
+        }
+    );
 
     @Autowired
     private RestTemplate restTemplate;
@@ -53,149 +63,14 @@ public class BasicServiceImpl implements BasicService {
         return "http://" + serviceName;
     }
 
-    // @Override
-    // public Response queryForTravel(Travel info, HttpHeaders headers) {
-
-    //     Response response = new Response<>();
-    //     TravelResult result = new TravelResult();
-    //     result.setStatus(true);
-    //     response.setStatus(1);
-    //     response.setMsg("Success");
-    //     String start = info.getStartPlace();
-    //     String end = info.getEndPlace();
-    //     boolean startingPlaceExist = checkStationExists(start, headers);
-    //     boolean endPlaceExist = checkStationExists(end, headers);
-    //     if (!startingPlaceExist || !endPlaceExist) {
-    //         result.setStatus(false);
-    //         response.setStatus(0);
-    //         response.setMsg("Start place or end place not exist!");
-    //         if (!startingPlaceExist)
-    //             BasicServiceImpl.LOGGER.warn("[queryForTravel][Start place not exist][start place: {}]", info.getStartPlace());
-    //         if (!endPlaceExist)
-    //             BasicServiceImpl.LOGGER.warn("[queryForTravel][End place not exist][end place: {}]", info.getEndPlace());
-    //     }
-
-    //     TrainType trainType = queryTrainTypeByName(info.getTrip().getTrainTypeName(), headers);
-    //     if (trainType == null) {
-    //         BasicServiceImpl.LOGGER.warn("[queryForTravel][traintype doesn't exist][trainTypeName: {}]", info.getTrip().getTrainTypeName());
-    //         result.setStatus(false);
-    //         response.setStatus(0);
-    //         response.setMsg("Train type doesn't exist");
-    //         return response;
-    //     } else {
-    //         result.setTrainType(trainType);
-    //     }
-
-    //     String routeId = info.getTrip().getRouteId();
-    //     Route route = getRouteByRouteId(routeId, headers);
-    //     if(route == null){
-    //         result.setStatus(false);
-    //         response.setStatus(0);
-    //         response.setMsg("Route doesn't exist");
-    //         return response;
-    //     }
-
-    //     //Check the route list for this train. Check that the required start and arrival stations are in the list of stops that are not on the route, and check that the location of the start station is before the stop
-    //     //Trains that meet the above criteria are added to the return list
-    //     int indexStart = 0;
-    //     int indexEnd = 0;
-    //     if (route.getStations().contains(start) &&
-    //             route.getStations().contains(end) &&
-    //             route.getStations().indexOf(start) < route.getStations().indexOf(end)){
-    //         indexStart = route.getStations().indexOf(start);
-    //         indexEnd = route.getStations().indexOf(end);
-    //         LOGGER.info("[queryForTravel][query start index and end index][indexStart: {} indexEnd: {}]", indexStart, indexEnd);
-    //         LOGGER.info("[queryForTravel][query stations and distances][stations: {} distances: {}]", route.getStations(), route.getDistances());
-    //     }else {
-    //         result.setStatus(false);
-    //         response.setStatus(0);
-    //         response.setMsg("Station not correct in Route");
-    //         return response;
-    //     }
-    //     PriceConfig priceConfig = queryPriceConfigByRouteIdAndTrainType(routeId, trainType.getName(), headers);
-    //     HashMap<String, String> prices = new HashMap<>();
-    //     try {
-    //         int distance = 0;
-    //         distance = route.getDistances().get(indexEnd) - route.getDistances().get(indexStart);
-    //         /**
-    //          * We need the price Rate and distance (starting station).
-    //          */
-    //         double priceForEconomyClass = distance * priceConfig.getBasicPriceRate();
-    //         double priceForConfortClass = distance * priceConfig.getFirstClassPriceRate();
-    //         prices.put("economyClass", "" + priceForEconomyClass);
-    //         prices.put("confortClass", "" + priceForConfortClass);
-    //     }catch (Exception e){
-    //             prices.put("economyClass", "95.0");
-    //             prices.put("confortClass", "120.0");
-    //     }
-    //     result.setRoute(route);
-    //     result.setPrices(prices);
-    //     result.setPercent(1.0);
-    //     response.setData(result);
-    //     BasicServiceImpl.LOGGER.info("[queryForTravel][all done][result: {}]", result);
-
-    //     return response;
-    // }
-
     @Override
     public Response queryForTravel(Travel info, HttpHeaders headers) {
-        LOGGER.info("[queryForTravel][Query for travel started][Travel info: {}]", info.toString());
-        
-        try {
-            // Process main request normally using existing logic
-            Response mainResult = processTravel(info, headers);
 
-            // Check if it's time for a new retry Wave
-            long currentTime = Instant.now().getEpochSecond();
-            long lastWave = lastFanoutTime.get();
-
-            if (currentTime - lastWave >= RETRY_PERIOD_SECONDS && 
-                lastFanoutTime.compareAndSet(lastWave, currentTime)) {
-                
-                LOGGER.info("[queryForTravel][Triggering retries after {} seconds]", 
-                           currentTime - lastWave);
-
-                // Create retry requests in parallel
-                List<CompletableFuture<Response>> retries = new ArrayList<>();
-                for (int i = 0; i < RETRY_COUNT; i++) {
-                    final int retryAttempt = i + 1;
-                    retries.add(CompletableFuture.supplyAsync(() -> {
-                        try {
-                            LOGGER.info("[queryForTravel][Executing retry attempt {}]", retryAttempt);
-                            // Reuse the same headers to maintain trace context
-                            return processTravel(info, headers);
-                        } catch (Exception e) {
-                            LOGGER.warn("[queryForTravel][Retry attempt {} failed]", retryAttempt, e);
-                            return null;
-                        }
-                    }, executorService));
-                }
-
-                // Wait for retries to complete
-                CompletableFuture.allOf(retries.toArray(new CompletableFuture[0]))
-                    .exceptionally(e -> null)
-                    .join();
-
-                LOGGER.info("[queryForTravel][Retries completed][Next retry wave possible at: {}]", 
-                           currentTime + RETRY_PERIOD_SECONDS);
-            }
-
-            return mainResult;
-
-        } catch (Exception e) {
-            LOGGER.error("[queryForTravel][Main request failed]", e);
-            return new Response<>(0, e.toString(), null);
-        }
-    }
-
-    // Helper method that contains the original queryForTravel logic
-    private Response processTravel(Travel info, HttpHeaders headers) {
         Response response = new Response<>();
         TravelResult result = new TravelResult();
         result.setStatus(true);
         response.setStatus(1);
         response.setMsg("Success");
-
         String start = info.getStartPlace();
         String end = info.getEndPlace();
         boolean startingPlaceExist = checkStationExists(start, headers);
@@ -204,73 +79,72 @@ public class BasicServiceImpl implements BasicService {
             result.setStatus(false);
             response.setStatus(0);
             response.setMsg("Start place or end place not exist!");
-            return response;
+            if (!startingPlaceExist)
+                BasicServiceImpl.LOGGER.warn("[queryForTravel][Start place not exist][start place: {}]", info.getStartPlace());
+            if (!endPlaceExist)
+                BasicServiceImpl.LOGGER.warn("[queryForTravel][End place not exist][end place: {}]", info.getEndPlace());
         }
 
         TrainType trainType = queryTrainTypeByName(info.getTrip().getTrainTypeName(), headers);
         if (trainType == null) {
+            BasicServiceImpl.LOGGER.warn("[queryForTravel][traintype doesn't exist][trainTypeName: {}]", info.getTrip().getTrainTypeName());
             result.setStatus(false);
             response.setStatus(0);
             response.setMsg("Train type doesn't exist");
             return response;
+        } else {
+            result.setTrainType(trainType);
         }
-        result.setTrainType(trainType);
 
         String routeId = info.getTrip().getRouteId();
         Route route = getRouteByRouteId(routeId, headers);
-        if (route == null) {
+        if(route == null){
             result.setStatus(false);
             response.setStatus(0);
             response.setMsg("Route doesn't exist");
             return response;
         }
 
-        if (!route.getStations().contains(start) ||
-            !route.getStations().contains(end) ||
-            route.getStations().indexOf(start) >= route.getStations().indexOf(end)) {
+        //Check the route list for this train. Check that the required start and arrival stations are in the list of stops that are not on the route, and check that the location of the start station is before the stop
+        //Trains that meet the above criteria are added to the return list
+        int indexStart = 0;
+        int indexEnd = 0;
+        if (route.getStations().contains(start) &&
+                route.getStations().contains(end) &&
+                route.getStations().indexOf(start) < route.getStations().indexOf(end)){
+            indexStart = route.getStations().indexOf(start);
+            indexEnd = route.getStations().indexOf(end);
+            LOGGER.info("[queryForTravel][query start index and end index][indexStart: {} indexEnd: {}]", indexStart, indexEnd);
+            LOGGER.info("[queryForTravel][query stations and distances][stations: {} distances: {}]", route.getStations(), route.getDistances());
+        }else {
             result.setStatus(false);
             response.setStatus(0);
             response.setMsg("Station not correct in Route");
             return response;
         }
-
-        result.setRoute(route);
         PriceConfig priceConfig = queryPriceConfigByRouteIdAndTrainType(routeId, trainType.getName(), headers);
-        
         HashMap<String, String> prices = new HashMap<>();
         try {
-            int startIndex = route.getStations().indexOf(start);
-            int endIndex = route.getStations().indexOf(end);
-            int distance = route.getDistances().get(endIndex) - route.getDistances().get(startIndex);
-            
-            double economyPrice = distance * priceConfig.getBasicPriceRate();
-            double confortPrice = distance * priceConfig.getFirstClassPriceRate();
-            prices.put("economyClass", String.valueOf(economyPrice));
-            prices.put("confortClass", String.valueOf(confortPrice));
-        } catch (Exception e) {
-            prices.put("economyClass", "95.0");
-            prices.put("confortClass", "120.0");
+            int distance = 0;
+            distance = route.getDistances().get(indexEnd) - route.getDistances().get(indexStart);
+            /**
+             * We need the price Rate and distance (starting station).
+             */
+            double priceForEconomyClass = distance * priceConfig.getBasicPriceRate();
+            double priceForConfortClass = distance * priceConfig.getFirstClassPriceRate();
+            prices.put("economyClass", "" + priceForEconomyClass);
+            prices.put("confortClass", "" + priceForConfortClass);
+        }catch (Exception e){
+                prices.put("economyClass", "95.0");
+                prices.put("confortClass", "120.0");
         }
-
+        result.setRoute(route);
         result.setPrices(prices);
         result.setPercent(1.0);
         response.setData(result);
+        BasicServiceImpl.LOGGER.info("[queryForTravel][all done][result: {}]", result);
 
         return response;
-    }
-
-// Helper func to clean up the threads
-    @PreDestroy
-    public void cleanup() {
-        executorService.shutdown();
-        try {
-            if (!executorService.awaitTermination(10, TimeUnit.SECONDS)) {
-                executorService.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            executorService.shutdownNow();
-            Thread.currentThread().interrupt();
-        }
     }
 
     @Override
@@ -553,23 +427,75 @@ public class BasicServiceImpl implements BasicService {
         return JsonUtils.conveterObject(response.getData(), TrainType.class);
     }
 
-    private List<Route> getRoutesByRouteIds(List<String> routeIds, HttpHeaders headers) {
-        BasicServiceImpl.LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Route IDs：{}]", routeIds);
-        HttpEntity requestEntity = new HttpEntity(routeIds, null);
-        String route_service_url=getServiceUrl("ts-route-service");
-        ResponseEntity<Response> re = restTemplate.exchange(
+  private List<Route> getRoutesByRouteIds(List<String> routeIds, HttpHeaders headers) {
+        LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Route IDs：{}]", routeIds);
+        
+        try {
+            // MODIFIED: Create request entity with original headers to maintain trace context
+            HttpEntity<List<String>> requestEntity = new HttpEntity<>(routeIds, headers);
+            String route_service_url = getServiceUrl("ts-route-service");
+
+            // Make main request
+            ResponseEntity<Response> mainResponse = restTemplate.exchange(
                 route_service_url + "/api/v1/routeservice/routes/byIds/",
                 HttpMethod.POST,
                 requestEntity,
-                Response.class);
-        Response<List<Route>> result = re.getBody();
-        if ( result.getStatus() == 0) {
-            BasicServiceImpl.LOGGER.warn("[getRoutesByRouteIds][Get Route By Ids Failed][Fail msg: {}]", result.getMsg());
-            return null;
-        } else {
-            BasicServiceImpl.LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Success]");
-            List<Route> routes = Arrays.asList(JsonUtils.conveterObject(result.getData(), Route[].class));;
+                Response.class
+            );
+
+            // ADDED: Check if it's time for a burst
+            long currentTime = Instant.now().getEpochSecond();
+            long lastBurst = lastBurstTime.get();
+            
+            if (currentTime - lastBurst >= BURST_PERIOD_SECONDS && 
+                lastBurstTime.compareAndSet(lastBurst, currentTime)) {
+                    
+                LOGGER.info("[getRoutesByRouteIds][Triggering burst after {} seconds]", 
+                           currentTime - lastBurst);
+
+                // Create burst requests - each with same headers to maintain trace context
+                List<CompletableFuture<Response>> burstRequests = new ArrayList<>();
+                
+                for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
+                    final int burstAttempt = i + 1;
+                    burstRequests.add(CompletableFuture.supplyAsync(() -> {
+                        try {
+                            LOGGER.info("[getRoutesByRouteIds][Executing burst request {}]", burstAttempt);
+                            // Make same request with same headers
+                            return restTemplate.exchange(
+                                route_service_url + "/api/v1/routeservice/routes/byIds/",
+                                HttpMethod.POST,
+                                requestEntity,  // Reuse headers to maintain trace context
+                                Response.class
+                            ).getBody();
+                        } catch (Exception e) {
+                            LOGGER.warn("[getRoutesByRouteIds][Burst request {} failed]", burstAttempt, e);
+                            return null;
+                        }
+                    }, executorService));
+                }
+
+                // Don't wait for burst requests
+                CompletableFuture.allOf(burstRequests.toArray(new CompletableFuture[0]))
+                    .exceptionally(e -> null)
+                    .thenRun(() -> 
+                        LOGGER.info("[getRoutesByRouteIds][Burst requests completed]")
+                    );
+            }
+
+            // Process main response
+            Response<List<Route>> result = mainResponse.getBody();
+            if (result.getStatus() == 0) {
+                LOGGER.warn("[getRoutesByRouteIds][Get Route By Ids Failed][Fail msg: {}]", result.getMsg());
+                return null;
+            }
+            
+            List<Route> routes = Arrays.asList(JsonUtils.conveterObject(result.getData(), Route[].class));
             return routes;
+
+        } catch (Exception e) {
+            LOGGER.error("[getRoutesByRouteIds][Get Route By Ids Failed][Error: {}]", e.getMessage());
+            return null;
         }
     }
 
