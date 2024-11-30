@@ -27,6 +27,11 @@ import java.time.Instant;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.atomic.AtomicLong;
 
+import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
+import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
+import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
+import org.apache.skywalking.apm.toolkit.trace.TraceContext;
+
 /**
  * @author fdse
  */
@@ -430,10 +435,15 @@ public class BasicServiceImpl implements BasicService {
         LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Route IDs：{}]", routeIds);
         
         try {
+            // Capture the current trace context
+            final String traceId = TraceContext.traceId();
+            LOGGER.info("[getRoutesByRouteIds][Current Trace ID: {}]", traceId);
+            
             HttpEntity<List<String>> requestEntity = new HttpEntity<>(routeIds, headers);
             String route_service_url = getServiceUrl("ts-route-service");
 
             // Make main request
+            ActiveSpan.tag("request.type", "main");
             ResponseEntity<Response> mainResponse = restTemplate.exchange(
                 route_service_url + "/api/v1/routeservice/routes/byIds/",
                 HttpMethod.POST,
@@ -452,31 +462,41 @@ public class BasicServiceImpl implements BasicService {
                            BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS);
 
                 // Schedule fixed-rate bursts for the duration
-                ScheduledFuture<?> burstSchedule = schedulerService.scheduleAtFixedRate(() -> {
-                    // Submit all requests for this second
-                    for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
-                        executorService.submit(() -> {
-                            try {
-                                LOGGER.debug("[getRoutesByRouteIds][Executing burst request]");
-                                restTemplate.exchange(
-                                    route_service_url + "/api/v1/routeservice/routes/byIds/",
-                                    HttpMethod.POST,
-                                    requestEntity,  // Reuse headers to maintain trace context
-                                    Response.class
-                                );
-                            } catch (Exception e) {
-                                LOGGER.warn("[getRoutesByRouteIds][Burst request failed][Error: {}]", e.getMessage());
-                            }
-                        });
-                    }
-                }, 0, 1000, TimeUnit.MILLISECONDS);
+                ScheduledFuture<?> burstSchedule = schedulerService.scheduleAtFixedRate(
+                    new RunnableWrapper(() -> {
+                        // Submit all requests for this second
+                        for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
+                            final int burstId = i + 1;
+                            executorService.submit(new RunnableWrapper(() -> {
+                                try {
+                                    // Create a new span for each burst request
+                                    ActiveSpan.tag("request.type", "burst");
+                                    ActiveSpan.tag("burst.id", String.valueOf(burstId));
+                                    
+                                    LOGGER.debug("[getRoutesByRouteIds][Executing burst request {}]", burstId);
+                                    restTemplate.exchange(
+                                        route_service_url + "/api/v1/routeservice/routes/byIds/",
+                                        HttpMethod.POST,
+                                        requestEntity,
+                                        Response.class
+                                    );
+                                } catch (Exception e) {
+                                    LOGGER.warn("[getRoutesByRouteIds][Burst request {} failed]", burstId, e);
+                                    ActiveSpan.tag("error", "true");
+                                    ActiveSpan.log(e.getMessage());
+                                }
+                            }));
+                        }
+                    }),
+                    0, 1000, TimeUnit.MILLISECONDS
+                );
 
                 // Schedule the burst termination
-                schedulerService.schedule(() -> {
+                schedulerService.schedule(new RunnableWrapper(() -> {
                     burstSchedule.cancel(false);
                     LOGGER.info("[getRoutesByRouteIds][Burst completed][Next burst possible in {} seconds]", 
                               BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS);
-                }, BURST_DURATION_SECONDS, TimeUnit.SECONDS);
+                }), BURST_DURATION_SECONDS, TimeUnit.SECONDS);
             }
 
             // Process main response
@@ -491,6 +511,8 @@ public class BasicServiceImpl implements BasicService {
 
         } catch (Exception e) {
             LOGGER.error("[getRoutesByRouteIds][Get Route By Ids Failed][Error: {}]", e.getMessage());
+            ActiveSpan.tag("error", "true");
+            ActiveSpan.log(e.getMessage());
             return null;
         }
     }
