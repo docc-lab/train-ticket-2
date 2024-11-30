@@ -34,22 +34,14 @@ import java.util.concurrent.atomic.AtomicLong;
 public class BasicServiceImpl implements BasicService {
 
     private static final int BURST_REQUESTS_PER_SEC = 10;
+    private static final int BURST_DURATION_SECONDS = 10;
     private static final int BURST_PERIOD_SECONDS = 60;
-    private static final AtomicLong lastBurstTime = new AtomicLong(0);
+    private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
     
-    // ADDED: Thread pool for executing burst requests
-    private static final ExecutorService executorService = Executors.newFixedThreadPool(
-        BURST_REQUESTS_PER_SEC,
-        new ThreadFactory() {
-            private final ThreadFactory defaultFactory = Executors.defaultThreadFactory();
-            @Override
-            public Thread newThread(Runnable r) {
-                Thread thread = defaultFactory.newThread(r);
-                thread.setName("burst-worker-" + thread.getName());
-                return thread;
-            }
-        }
-    );
+    // Executors for burst handling
+    private final ExecutorService executorService;
+    private final ScheduledExecutorService schedulerService;
+    private static final AtomicLong lastBurstTime = new AtomicLong(0);
 
     @Autowired
     private RestTemplate restTemplate;
@@ -58,6 +50,13 @@ public class BasicServiceImpl implements BasicService {
     private DiscoveryClient discoveryClient;
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BasicServiceImpl.class);
+
+    public BasicServiceImpl() {
+        this.executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
+        this.schedulerService = Executors.newScheduledThreadPool(1);
+        LOGGER.info("BasicServiceImpl initialized with burst config: {} requests/sec for {} seconds, repeating every {} seconds",
+                   BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, BURST_PERIOD_SECONDS);
+    }
 
     private String getServiceUrl(String serviceName) {
         return "http://" + serviceName;
@@ -427,11 +426,10 @@ public class BasicServiceImpl implements BasicService {
         return JsonUtils.conveterObject(response.getData(), TrainType.class);
     }
 
-  private List<Route> getRoutesByRouteIds(List<String> routeIds, HttpHeaders headers) {
+    private List<Route> getRoutesByRouteIds(List<String> routeIds, HttpHeaders headers) {
         LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Route IDs：{}]", routeIds);
         
         try {
-            // MODIFIED: Create request entity with original headers to maintain trace context
             HttpEntity<List<String>> requestEntity = new HttpEntity<>(routeIds, headers);
             String route_service_url = getServiceUrl("ts-route-service");
 
@@ -443,44 +441,42 @@ public class BasicServiceImpl implements BasicService {
                 Response.class
             );
 
-            // ADDED: Check if it's time for a burst
+            // Check if it's time for a burst
             long currentTime = Instant.now().getEpochSecond();
             long lastBurst = lastBurstTime.get();
             
             if (currentTime - lastBurst >= BURST_PERIOD_SECONDS && 
                 lastBurstTime.compareAndSet(lastBurst, currentTime)) {
                     
-                LOGGER.info("[getRoutesByRouteIds][Triggering burst after {} seconds]", 
-                           currentTime - lastBurst);
+                LOGGER.info("[getRoutesByRouteIds][Starting burst: {} requests/sec for {} seconds]", 
+                           BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS);
 
-                // Create burst requests - each with same headers to maintain trace context
-                List<CompletableFuture<Response>> burstRequests = new ArrayList<>();
-                
-                for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
-                    final int burstAttempt = i + 1;
-                    burstRequests.add(CompletableFuture.supplyAsync(() -> {
-                        try {
-                            LOGGER.info("[getRoutesByRouteIds][Executing burst request {}]", burstAttempt);
-                            // Make same request with same headers
-                            return restTemplate.exchange(
-                                route_service_url + "/api/v1/routeservice/routes/byIds/",
-                                HttpMethod.POST,
-                                requestEntity,  // Reuse headers to maintain trace context
-                                Response.class
-                            ).getBody();
-                        } catch (Exception e) {
-                            LOGGER.warn("[getRoutesByRouteIds][Burst request {} failed]", burstAttempt, e);
-                            return null;
-                        }
-                    }, executorService));
-                }
+                // Schedule fixed-rate bursts for the duration
+                ScheduledFuture<?> burstSchedule = schedulerService.scheduleAtFixedRate(() -> {
+                    // Submit all requests for this second
+                    for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
+                        executorService.submit(() -> {
+                            try {
+                                LOGGER.debug("[getRoutesByRouteIds][Executing burst request]");
+                                restTemplate.exchange(
+                                    route_service_url + "/api/v1/routeservice/routes/byIds/",
+                                    HttpMethod.POST,
+                                    requestEntity,  // Reuse headers to maintain trace context
+                                    Response.class
+                                );
+                            } catch (Exception e) {
+                                LOGGER.warn("[getRoutesByRouteIds][Burst request failed][Error: {}]", e.getMessage());
+                            }
+                        });
+                    }
+                }, 0, 1000, TimeUnit.MILLISECONDS);
 
-                // Don't wait for burst requests
-                CompletableFuture.allOf(burstRequests.toArray(new CompletableFuture[0]))
-                    .exceptionally(e -> null)
-                    .thenRun(() -> 
-                        LOGGER.info("[getRoutesByRouteIds][Burst requests completed]")
-                    );
+                // Schedule the burst termination
+                schedulerService.schedule(() -> {
+                    burstSchedule.cancel(false);
+                    LOGGER.info("[getRoutesByRouteIds][Burst completed][Next burst possible in {} seconds]", 
+                              BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS);
+                }, BURST_DURATION_SECONDS, TimeUnit.SECONDS);
             }
 
             // Process main response
@@ -496,6 +492,26 @@ public class BasicServiceImpl implements BasicService {
         } catch (Exception e) {
             LOGGER.error("[getRoutesByRouteIds][Get Route By Ids Failed][Error: {}]", e.getMessage());
             return null;
+        }
+    }
+
+    @PreDestroy
+    public void shutdownExecutorServices() {
+        LOGGER.info("Shutting down executor services");
+        executorService.shutdown();
+        schedulerService.shutdown();
+        try {
+            if (!executorService.awaitTermination(60, TimeUnit.SECONDS)) {
+                executorService.shutdownNow();
+            }
+            if (!schedulerService.awaitTermination(60, TimeUnit.SECONDS)) {
+                schedulerService.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            executorService.shutdownNow();
+            schedulerService.shutdownNow();
+            Thread.currentThread().interrupt();
+            LOGGER.error("Shutdown interrupted", e);
         }
     }
 
