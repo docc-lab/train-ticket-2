@@ -444,37 +444,26 @@ public class BasicServiceImpl implements BasicService {
         private final String route_service_url;
         private final HttpEntity<List<String>> requestEntity;
         private final int burstId;
-        private final String parentTraceId;
+        private final ContextSnapshot contextSnapshot;  // Add this
 
-        public BurstTask(String url, HttpEntity<List<String>> request, int id, String traceId) {
+        public BurstTask(String url, HttpEntity<List<String>> request, int id, ContextSnapshot snapshot) {
             this.route_service_url = url;
             this.requestEntity = request;
             this.burstId = id;
-            this.parentTraceId = traceId;
+            this.contextSnapshot = snapshot;  // Store snapshot
         }
 
         @Override
-        @Trace(operationName = "basicservice/burstRequest")
+        @Trace(operationName = "basicservice/burstRequest") 
         public void run() {
-            try {
-                // Create new headers to propagate trace context
-                HttpHeaders burstHeaders = new HttpHeaders();
-                burstHeaders.putAll(requestEntity.getHeaders());
-                burstHeaders.set("sw8-correlation", parentTraceId); // Add trace correlation
-                
-                HttpEntity<List<String>> burstRequest = new HttpEntity<>(
-                    requestEntity.getBody(),
-                    burstHeaders
-                );
-
+            try (ContextManager.Continuation ignored = ContextManager.continued(contextSnapshot)) {
                 ActiveSpan.tag("burst.id", String.valueOf(burstId));
-                ActiveSpan.tag("burst.parentTrace", parentTraceId);
                 ActiveSpan.tag("burst.type", "fanout");
                 
                 ResponseEntity<Response> response = restTemplate.exchange(
                     route_service_url + "/api/v1/routeservice/routes/byIds/",
                     HttpMethod.POST,
-                    burstRequest,
+                    requestEntity,
                     Response.class
                 );
                 
@@ -483,51 +472,51 @@ public class BasicServiceImpl implements BasicService {
                     ActiveSpan.tag("error.msg", response.getBody().getMsg());
                 }
             } catch (Exception e) {
-                ActiveSpan.tag("error", "true");
+                ActiveSpan.tag("error", "true"); 
                 ActiveSpan.tag("error.msg", e.getMessage());
                 LOGGER.error("[burstRequest][Burst request {} failed]", burstId, e);
             }
         }
     }
 
-
     @TraceCrossThread
     private class BurstController implements Runnable {
         private final String route_service_url;
         private final HttpEntity<List<String>> requestEntity;
-        private final String parentTraceId;
+        private final ContextSnapshot contextSnapshot;
 
-        public BurstController(String url, HttpEntity<List<String>> request, String traceId) {
+        public BurstController(String url, HttpEntity<List<String>> request) {
             this.route_service_url = url;
             this.requestEntity = request;
-            this.parentTraceId = traceId;
+            this.contextSnapshot = ContextManager.capture(); // Capture context when created
         }
 
         @Override
         @Trace(operationName = "basicservice/burstController")
         public void run() {
-            try {
+            try (ContextManager.Continuation ignored = ContextManager.continued(contextSnapshot)) {
                 ActiveSpan.tag("burst.started", "true");
-                ActiveSpan.tag("burst.parentTrace", parentTraceId);
                 ActiveSpan.tag("burst.type", "controller");
 
-                // Schedule fixed-rate bursts
-                ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
-                    try {
-                        for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
-                            final int burstId = i + 1;
-                            taskExecutor.execute(new BurstTask(route_service_url, requestEntity, burstId, parentTraceId));
-                        }
-                    } catch (Exception e) {
-                        LOGGER.error("Error in burst wave", e);
-                    }
-                }, 1000); // 1 second fixed rate
+                // Get a new context snapshot for child tasks
+                final ContextSnapshot taskSnapshot = ContextManager.capture();
 
-                // Schedule burst termination after duration
+                ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
+                    for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
+                        final int burstId = i + 1;
+                        taskExecutor.execute(new BurstTask(
+                            route_service_url, 
+                            requestEntity,
+                            burstId,
+                            taskSnapshot  // Pass context to tasks
+                        ));
+                    }
+                }, 1000);
+
+                // Schedule termination
                 taskScheduler.schedule(() -> {
                     burstSchedule.cancel(false);
-                    LOGGER.info("[burstController][Burst completed][Next burst possible in {} seconds]", 
-                            BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS);
+                    LOGGER.info("Burst completed");
                 }, Instant.now().plusSeconds(BURST_DURATION_SECONDS));
 
             } catch (Exception e) {
@@ -570,7 +559,7 @@ public class BasicServiceImpl implements BasicService {
                 ActiveSpan.tag("burst.trigger", "true");
                 
                 // Start burst controller with parent trace context
-                taskExecutor.execute(new BurstController(route_service_url, requestEntity, traceId));
+                taskExecutor.execute(new BurstController(route_service_url, requestEntity));
             }
 
             // Process main response
@@ -588,30 +577,6 @@ public class BasicServiceImpl implements BasicService {
         }
     }
 
-    // @Trace(operationName = "executeBurstRequest") 
-    // protected void executeBurstRequest(String route_service_url, HttpEntity<List<String>> requestEntity, int burstId) {
-    //     try {
-    //         ActiveSpan.tag("burst.id", String.valueOf(burstId));
-    //         ActiveSpan.tag("burst.type", "async");
-            
-    //         // Execute request in separate trace segment
-    //         ResponseEntity<Response> response = restTemplate.exchange(
-    //             route_service_url + "/api/v1/routeservice/routes/byIds/",
-    //             HttpMethod.POST,
-    //             requestEntity,
-    //             Response.class
-    //         );
-            
-    //         if (response.getBody().getStatus() != 1) {
-    //             ActiveSpan.tag("error", "true");
-    //             ActiveSpan.tag("error.msg", response.getBody().getMsg());
-    //         }
-    //     } catch (Exception e) {
-    //         ActiveSpan.tag("error", "true");
-    //         ActiveSpan.tag("error.msg", e.getMessage());
-    //         LOGGER.error("[executeBurstRequest][Burst request {} failed]", burstId, e);
-    //     }
-    // }
 
     private Route getRouteByRouteId(String routeId, HttpHeaders headers) {
         BasicServiceImpl.LOGGER.info("[getRouteByRouteId][Get Route By Id][Route ID：{}]", routeId);
