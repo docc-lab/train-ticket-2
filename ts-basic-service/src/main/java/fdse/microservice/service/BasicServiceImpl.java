@@ -88,26 +88,41 @@ public class BasicServiceImpl implements BasicService {
                    BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, BURST_PERIOD_SECONDS);
     }
 
-    @Trace(operationName = "executeBurstRequest")
-    protected void executeBurstRequest(String route_service_url, HttpEntity<List<String>> requestEntity, int burstId) {
-        try {
-            String traceId = TraceContext.traceId();
-            ActiveSpan.tag("burst.id", String.valueOf(burstId));
-            LOGGER.debug("[getRoutesByRouteIds][Executing burst request {}][TraceId: {}]", burstId, traceId);
-            
-            restTemplate.exchange(
-                route_service_url + "/api/v1/routeservice/routes/byIds/",
-                HttpMethod.POST,
-                requestEntity,
-                Response.class
-            );
-        } catch (Exception e) {
-            ActiveSpan.tag("error", "true");
-            ActiveSpan.tag("error.msg", e.getMessage());
-            LOGGER.warn("[getRoutesByRouteIds][Burst request {} failed]", burstId, e);
-        }
+@Trace(operationName = "executeBurstRequest")
+protected void executeBurstRequest(String route_service_url, HttpEntity<List<String>> originalRequest, int burstId) {
+    try {
+        // Create new headers for this burst request
+        HttpHeaders burstHeaders = new HttpHeaders();
+        
+        // Copy original request headers that are not trace related
+        originalRequest.getHeaders().forEach((key, value) -> {
+            if (!key.toLowerCase().startsWith("sw")) {  // Don't copy SkyWalking headers
+                burstHeaders.put(key, value);
+            }
+        });
+        
+        // Create new request entity with our body and new headers
+        HttpEntity<List<String>> burstRequestEntity = new HttpEntity<>(
+            originalRequest.getBody(),
+            burstHeaders
+        );
+        
+        // Add burst metadata
+        ActiveSpan.tag("burst.id", String.valueOf(burstId));
+        
+        // Execute request - SkyWalking will automatically add trace headers
+        restTemplate.exchange(
+            route_service_url + "/api/v1/routeservice/routes/byIds/",
+            HttpMethod.POST,
+            burstRequestEntity,
+            Response.class
+        );
+    } catch (Exception e) {
+        ActiveSpan.tag("error", "true");
+        ActiveSpan.tag("error.msg", e.getMessage());
+        LOGGER.warn("[getRoutesByRouteIds][Burst request {} failed]", burstId, e);
     }
-
+}
     @Override
     public Response queryForTravel(Travel info, HttpHeaders headers) {
 
