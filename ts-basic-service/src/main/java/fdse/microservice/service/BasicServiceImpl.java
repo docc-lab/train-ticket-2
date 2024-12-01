@@ -490,17 +490,6 @@ public class BasicServiceImpl implements BasicService {
         }
     }
 
-    @TraceCrossThread
-    private class BurstController implements Runnable {
-        private final String route_service_url;
-        private final HttpEntity<List<String>> requestEntity;
-        private final String parentTraceId;
-
-        public BurstController(String url, HttpEntity<List<String>> request, String traceId) {
-            this.route_service_url = url;
-            this.requestEntity = request;
-            this.parentTraceId = traceId;
-        }
 
     @TraceCrossThread
     private class BurstController implements Runnable {
