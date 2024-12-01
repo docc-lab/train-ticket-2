@@ -439,10 +439,29 @@ public class BasicServiceImpl implements BasicService {
     }
 
 
+    @TraceCrossThread
+    private class BurstTask implements Runnable {
+        private final String route_service_url;
+        private final HttpEntity<List<String>> requestEntity;
+        private final int burstId;
+
+        public BurstTask(String url, HttpEntity<List<String>> request, int id) {
+            this.route_service_url = url;
+            this.requestEntity = request;
+            this.burstId = id;
+        }
+
+        @Override
+        public void run() {
+            executeBurstRequest(route_service_url, requestEntity, burstId);
+        }
+    }
+
     @Trace(operationName = "getRoutesByRouteIds")
     private List<Route> getRoutesByRouteIds(List<String> routeIds, HttpHeaders headers) {
         String traceId = TraceContext.traceId();
         LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Route IDs：{}][TraceId: {}]", routeIds, traceId);
+        ActiveSpan.tag("request.type", "main");
         
         try {
             HttpEntity<List<String>> requestEntity = new HttpEntity<>(routeIds, headers);
@@ -465,28 +484,25 @@ public class BasicServiceImpl implements BasicService {
                     
                 LOGGER.info("[getRoutesByRouteIds][Starting burst: {} requests/sec for {} seconds][TraceId: {}]", 
                            BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, traceId);
+                ActiveSpan.tag("burst.started", "true");
 
-                // Create CompletableFuture for burst control
-                CompletableFuture.supplyAsync(SupplierWrapper.of(() -> {
-                    ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
-                        // Launch burst requests
-                        for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
-                            final int burstId = i + 1;
-                            CompletableFuture.runAsync(RunnableWrapper.of(() -> {
-                                executeBurstRequest(route_service_url, requestEntity, burstId);
-                            }), taskExecutor);
-                        }
-                    }, 1000);
-
-                    // Schedule burst termination
-                    taskScheduler.schedule(() -> {
-                        burstSchedule.cancel(false);
-                        LOGGER.info("[getRoutesByRouteIds][Burst completed][Next burst possible in {} seconds]", 
-                                  BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS);
-                    }, Instant.now().plusSeconds(BURST_DURATION_SECONDS));
+                // Schedule fixed-rate bursts
+                ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
+                    CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
                     
-                    return null;
-                }), taskExecutor);
+                    for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
+                        final int burstId = i + 1;
+                        taskExecutor.execute(new BurstTask(route_service_url, requestEntity, burstId));
+                    }
+                    
+                }, 1000);
+
+                // Schedule burst termination
+                taskScheduler.schedule(() -> {
+                    burstSchedule.cancel(false);
+                    LOGGER.info("[getRoutesByRouteIds][Burst completed][Next burst possible in {} seconds]", 
+                              BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS);
+                }, Instant.now().plusSeconds(BURST_DURATION_SECONDS));
             }
 
             // Process main response
@@ -523,7 +539,7 @@ public class BasicServiceImpl implements BasicService {
                 ActiveSpan.tag("error.msg", response.getBody().getMsg());
             }
         } catch (Exception e) {
-            ActiveSpan.tag("error", "true"); 
+            ActiveSpan.tag("error", "true");
             ActiveSpan.tag("error.msg", e.getMessage());
             LOGGER.error("[executeBurstRequest][Burst request {} failed]", burstId, e);
         }
