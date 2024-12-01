@@ -58,6 +58,8 @@ public class BasicServiceImpl implements BasicService {
     private String getServiceUrl(String serviceName) {
         return "http://" + serviceName;
     }
+    @Autowired
+    private TaskDecorator traceContextDecorator;
 
     @PostConstruct
     public void init() {
@@ -66,11 +68,13 @@ public class BasicServiceImpl implements BasicService {
         this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
         this.taskExecutor.setQueueCapacity(100);
         this.taskExecutor.setThreadNamePrefix("burst-worker-");
+        this.taskExecutor.setTaskDecorator(traceContextDecorator);  // Use autowired decorator
         this.taskExecutor.initialize();
 
         this.taskScheduler = new ThreadPoolTaskScheduler();
         this.taskScheduler.setPoolSize(1);
         this.taskScheduler.setThreadNamePrefix("burst-scheduler-");
+        this.taskScheduler.setTaskDecorator(traceContextDecorator);  // Use autowired decorator
         this.taskScheduler.initialize();
     }
 
@@ -457,6 +461,7 @@ public class BasicServiceImpl implements BasicService {
             try {
                 ActiveSpan.tag("burst.id", String.valueOf(burstId));
                 ActiveSpan.tag("burst.type", "fanout");
+                ActiveSpan.tag("service.name", "ts-basic-service");
                 
                 ResponseEntity<Response> response = restTemplate.exchange(
                     route_service_url + "/api/v1/routeservice/routes/byIds/",
@@ -493,25 +498,21 @@ public class BasicServiceImpl implements BasicService {
             try {
                 ActiveSpan.tag("burst.started", "true");
                 ActiveSpan.tag("burst.type", "controller");
+                ActiveSpan.tag("service.name", "ts-basic-service");
 
-                ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
-                    for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
-                        final int burstId = i + 1;
-                        // Use RunnableWrapper to propagate context
-                        taskExecutor.execute(RunnableWrapper.of(new BurstTask(
+                for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
+                    for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
+                        final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
+                        taskExecutor.execute(new BurstTask(
                             route_service_url, 
                             requestEntity,
                             burstId
-                        )));
+                        ));
                     }
-                }, 1000);
+                    Thread.sleep(1000);  // Sleep for 1 second between bursts
+                }
 
-                // Schedule termination
-                taskScheduler.schedule(() -> {
-                    burstSchedule.cancel(false);
-                    LOGGER.info("Burst completed");
-                }, Instant.now().plusSeconds(BURST_DURATION_SECONDS));
-
+                LOGGER.info("Burst completed");
             } catch (Exception e) {
                 LOGGER.error("Error in burst controller", e);
                 ActiveSpan.tag("error", "true");
