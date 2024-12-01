@@ -454,17 +454,27 @@ public class BasicServiceImpl implements BasicService {
         }
 
         @Override
-        @Trace(operationName = "executeBurstRequest")
+        @Trace(operationName = "basicservice/burstRequest")
         public void run() {
-            // Explicitly start burst span as child of parent trace
-            ActiveSpan.tag("burst.id", String.valueOf(burstId));
-            ActiveSpan.tag("burst.parentTrace", parentTraceId);
-            
             try {
+                // Create new headers to propagate trace context
+                HttpHeaders burstHeaders = new HttpHeaders();
+                burstHeaders.putAll(requestEntity.getHeaders());
+                burstHeaders.set("sw8-correlation", parentTraceId); // Add trace correlation
+                
+                HttpEntity<List<String>> burstRequest = new HttpEntity<>(
+                    requestEntity.getBody(),
+                    burstHeaders
+                );
+
+                ActiveSpan.tag("burst.id", String.valueOf(burstId));
+                ActiveSpan.tag("burst.parentTrace", parentTraceId);
+                ActiveSpan.tag("burst.type", "fanout");
+                
                 ResponseEntity<Response> response = restTemplate.exchange(
                     route_service_url + "/api/v1/routeservice/routes/byIds/",
                     HttpMethod.POST,
-                    requestEntity,
+                    burstRequest,
                     Response.class
                 );
                 
@@ -475,7 +485,7 @@ public class BasicServiceImpl implements BasicService {
             } catch (Exception e) {
                 ActiveSpan.tag("error", "true");
                 ActiveSpan.tag("error.msg", e.getMessage());
-                LOGGER.error("[executeBurstRequest][Burst request {} failed]", burstId, e);
+                LOGGER.error("[burstRequest][Burst request {} failed]", burstId, e);
             }
         }
     }
@@ -493,24 +503,40 @@ public class BasicServiceImpl implements BasicService {
         }
 
         @Override
-        @Trace(operationName = "burstController")
+        @Trace(operationName = "basicservice/burstController")
         public void run() {
-            ActiveSpan.tag("burst.started", "true");
-            ActiveSpan.tag("burst.parentTrace", parentTraceId);
-            
-            ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
-                for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
-                    final int burstId = i + 1;
-                    taskExecutor.execute(new BurstTask(route_service_url, requestEntity, burstId, parentTraceId));
-                }
-            }, 1000);
+            try {
+                ActiveSpan.tag("burst.started", "true");
+                ActiveSpan.tag("burst.parentTrace", parentTraceId);
+                ActiveSpan.tag("burst.type", "controller");
 
-            // Schedule burst termination
-            taskScheduler.schedule(() -> {
+                // Create a CountDownLatch for the burst period
+                CountDownLatch burstLatch = new CountDownLatch(BURST_DURATION_SECONDS);
+                
+                ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
+                    try {
+                        // Launch burst requests
+                        for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
+                            final int burstId = i + 1;
+                            taskExecutor.execute(new BurstTask(route_service_url, requestEntity, burstId, parentTraceId));
+                        }
+                        burstLatch.countDown();
+                    } catch (Exception e) {
+                        LOGGER.error("Error in burst wave", e);
+                    }
+                }, 0, 1000, TimeUnit.MILLISECONDS);
+
+                // Wait for burst period to complete
+                burstLatch.await();
                 burstSchedule.cancel(false);
+                
                 LOGGER.info("[burstController][Burst completed][Next burst possible in {} seconds]", 
                           BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS);
-            }, Instant.now().plusSeconds(BURST_DURATION_SECONDS));
+            } catch (Exception e) {
+                LOGGER.error("Error in burst controller", e);
+                ActiveSpan.tag("error", "true");
+                ActiveSpan.tag("error.msg", e.getMessage());
+            }
         }
     }
 
@@ -532,7 +558,7 @@ public class BasicServiceImpl implements BasicService {
                 Response.class
             );
 
-            // Check if it's time for a burst
+            // Start burst if needed
             long currentTime = Instant.now().getEpochSecond();
             long lastBurst = lastBurstTime.get();
             
@@ -540,8 +566,11 @@ public class BasicServiceImpl implements BasicService {
                 lastBurstTime.compareAndSet(lastBurst, currentTime)) {
                     
                 LOGGER.info("[getRoutesByRouteIds][Starting burst: {} requests/sec for {} seconds][TraceId: {}]", 
-                        BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, traceId);
+                           BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, traceId);
 
+                // Create a local span for burst operations
+                ActiveSpan.tag("burst.trigger", "true");
+                
                 // Start burst controller with parent trace context
                 taskExecutor.execute(new BurstController(route_service_url, requestEntity, traceId));
             }
