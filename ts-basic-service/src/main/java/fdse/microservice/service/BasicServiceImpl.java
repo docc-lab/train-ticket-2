@@ -23,7 +23,6 @@ import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
 import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.TraceContext;
-import org.apache.skywalking.apm.toolkit.trace.async.AsyncProcess;
 
 import java.time.Instant;
 import java.util.*;
@@ -468,18 +467,30 @@ public class BasicServiceImpl implements BasicService {
                 LOGGER.info("[getRoutesByRouteIds][Starting burst: {} requests/sec for {} seconds][TraceId: {}]", 
                            BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, traceId);
 
-                // Create an async segment for burst handling
-                AsyncProcess.triggerAsync(() -> {
+                // Schedule fixed-rate bursts using RunnableWrapper
+                taskExecutor.execute(RunnableWrapper.of(() -> {
                     ActiveSpan.tag("burst.started", "true");
                     
-                    // Schedule fixed-rate bursts
                     ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
+                        CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
+                        
                         for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
                             final int burstId = i + 1;
-                            // Use AsyncProcess for each individual burst request
-                            AsyncProcess.triggerAsync(new RunnableWrapper(() -> {
-                                executeBurstRequest(route_service_url, requestEntity, burstId);
+                            taskExecutor.execute(RunnableWrapper.of(() -> {
+                                try {
+                                    executeBurstRequest(route_service_url, requestEntity, burstId);
+                                } finally {
+                                    latch.countDown();
+                                }
                             }));
+                        }
+                        
+                        try {
+                            if (!latch.await(900, TimeUnit.MILLISECONDS)) {
+                                LOGGER.warn("[getRoutesByRouteIds][Some burst requests didn't complete in time][TraceId: {}]", traceId);
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
                         }
                     }, 1000);
 
@@ -489,7 +500,7 @@ public class BasicServiceImpl implements BasicService {
                         LOGGER.info("[getRoutesByRouteIds][Burst completed][Next burst possible in {} seconds]", 
                                   BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS);
                     }, Instant.now().plusSeconds(BURST_DURATION_SECONDS));
-                });
+                }));
             }
 
             // Process main response
