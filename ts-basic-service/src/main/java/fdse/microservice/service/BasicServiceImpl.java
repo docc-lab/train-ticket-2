@@ -66,14 +66,19 @@ public class BasicServiceImpl implements BasicService {
         this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
         this.taskExecutor.setQueueCapacity(100);
         this.taskExecutor.setThreadNamePrefix("burst-worker-");
-        this.taskExecutor.setTaskDecorator(runnable -> {
-            String currentTraceId = TraceContext.traceId();
+        this.taskExecutor.setTaskDecorator(task -> {
+            String parentTraceId = TraceContext.traceId();
             return () -> {
                 try {
-                    ActiveSpan.tag("burst.traceId", currentTraceId);
-                    runnable.run();
-                } finally {
-                    ActiveSpan.tag("burst.completed", currentTraceId);
+                    // Explicitly create a new span for each burst request
+                    try (Trace trace = TracingContextHelper.continueTraceContext(parentTraceId)) {
+                        ActiveSpan.tag("burst.parentTrace", parentTraceId);
+                        task.run();
+                    }
+                } catch (Exception e) {
+                    LOGGER.error("Error in burst task", e);
+                    ActiveSpan.tag("error", "true");
+                    ActiveSpan.tag("error.msg", e.getMessage());
                 }
             };
         });
@@ -83,46 +88,43 @@ public class BasicServiceImpl implements BasicService {
         this.taskScheduler.setPoolSize(1);
         this.taskScheduler.setThreadNamePrefix("burst-scheduler-");
         this.taskScheduler.initialize();
-
-        LOGGER.info("BasicServiceImpl initialized with burst config: {} requests/sec for {} seconds, repeating every {} seconds",
-                   BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, BURST_PERIOD_SECONDS);
     }
 
-@Trace(operationName = "executeBurstRequest")
-protected void executeBurstRequest(String route_service_url, HttpEntity<List<String>> originalRequest, int burstId) {
-    try {
-        // Create new headers for this burst request
+
+    @Trace
+    protected void executeBurstRequest(String route_service_url, HttpEntity<List<String>> request, int burstId) {
+        String parentTraceId = TraceContext.traceId();
+        
+        // Create new headers to preserve trace context
         HttpHeaders burstHeaders = new HttpHeaders();
+        burstHeaders.putAll(request.getHeaders());
         
-        // Copy original request headers that are not trace related
-        originalRequest.getHeaders().forEach((key, value) -> {
-            if (!key.toLowerCase().startsWith("sw")) {  // Don't copy SkyWalking headers
-                burstHeaders.put(key, value);
-            }
-        });
+        // Add SkyWalking context headers
+        burstHeaders.set("sw8", generateSW8Header(parentTraceId, burstId));
         
-        // Create new request entity with our body and new headers
-        HttpEntity<List<String>> burstRequestEntity = new HttpEntity<>(
-            originalRequest.getBody(),
+        HttpEntity<List<String>> burstRequest = new HttpEntity<>(
+            request.getBody(),
             burstHeaders
         );
-        
-        // Add burst metadata
-        ActiveSpan.tag("burst.id", String.valueOf(burstId));
-        
-        // Execute request - SkyWalking will automatically add trace headers
-        restTemplate.exchange(
-            route_service_url + "/api/v1/routeservice/routes/byIds/",
-            HttpMethod.POST,
-            burstRequestEntity,
-            Response.class
-        );
-    } catch (Exception e) {
-        ActiveSpan.tag("error", "true");
-        ActiveSpan.tag("error.msg", e.getMessage());
-        LOGGER.warn("[getRoutesByRouteIds][Burst request {} failed]", burstId, e);
+
+        try {
+            ActiveSpan.tag("burst.id", String.valueOf(burstId));
+            ActiveSpan.tag("burst.parentTrace", parentTraceId);
+            
+            restTemplate.exchange(
+                route_service_url + "/api/v1/routeservice/routes/byIds/",
+                HttpMethod.POST,
+                burstRequest,
+                Response.class
+            );
+        } catch (Exception e) {
+            LOGGER.error("Burst request failed", e);
+            ActiveSpan.tag("error", "true");
+            ActiveSpan.tag("error.msg", e.getMessage());
+        }
     }
-}
+
+
     @Override
     public Response queryForTravel(Travel info, HttpHeaders headers) {
 
@@ -487,11 +489,11 @@ protected void executeBurstRequest(String route_service_url, HttpEntity<List<Str
         return JsonUtils.conveterObject(response.getData(), TrainType.class);
     }
 
+
     @Trace(operationName = "getRoutesByRouteIds")
     private List<Route> getRoutesByRouteIds(List<String> routeIds, HttpHeaders headers) {
         String traceId = TraceContext.traceId();
         LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Route IDs：{}][TraceId: {}]", routeIds, traceId);
-        ActiveSpan.tag("request.type", "main");
         
         try {
             HttpEntity<List<String>> requestEntity = new HttpEntity<>(routeIds, headers);
@@ -514,13 +516,16 @@ protected void executeBurstRequest(String route_service_url, HttpEntity<List<Str
                     
                 LOGGER.info("[getRoutesByRouteIds][Starting burst: {} requests/sec for {} seconds][TraceId: {}]", 
                            BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, traceId);
-                ActiveSpan.tag("burst.started", "true");
 
-                // Schedule fixed-rate bursts for the duration
-                ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
-                    try {
-                        // Submit all requests for this second
+                // Create a new trace segment for the burst
+                try (Trace burstTrace = TracingContext.createEntrySpan("route-service-burst", null)) {
+                    ActiveSpan.tag("burst.started", "true");
+                    ActiveSpan.tag("burst.parentTrace", traceId);
+
+                    // Schedule fixed-rate bursts
+                    ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
                         CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
+                        
                         for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
                             final int burstId = i + 1;
                             taskExecutor.execute(() -> {
@@ -531,27 +536,28 @@ protected void executeBurstRequest(String route_service_url, HttpEntity<List<Str
                                 }
                             });
                         }
-                        // Wait for all burst requests to complete
-                        if (!latch.await(900, TimeUnit.MILLISECONDS)) {
-                            LOGGER.warn("[getRoutesByRouteIds][Some burst requests didn't complete in time][TraceId: {}]", traceId);
+                        
+                        try {
+                            if (!latch.await(900, TimeUnit.MILLISECONDS)) {
+                                LOGGER.warn("[getRoutesByRouteIds][Some burst requests didn't complete in time][TraceId: {}]", traceId);
+                            }
+                        } catch (InterruptedException e) {
+                            Thread.currentThread().interrupt();
                         }
-                    } catch (Exception e) {
-                        LOGGER.error("[getRoutesByRouteIds][Burst wave failed][TraceId: {}]", traceId, e);
-                    }
-                }, 1000);
+                    }, 1000);
 
-                // Schedule the burst termination
-                taskScheduler.schedule(() -> {
-                    burstSchedule.cancel(false);
-                    LOGGER.info("[getRoutesByRouteIds][Burst completed][Next burst possible in {} seconds][TraceId: {}]", 
-                              BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS, traceId);
-                }, Instant.now().plusSeconds(BURST_DURATION_SECONDS));
+                    // Schedule burst termination
+                    taskScheduler.schedule(() -> {
+                        burstSchedule.cancel(false);
+                        LOGGER.info("[getRoutesByRouteIds][Burst completed][Next burst possible in {} seconds][TraceId: {}]", 
+                                  BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS, traceId);
+                    }, Instant.now().plusSeconds(BURST_DURATION_SECONDS));
+                }
             }
 
             // Process main response
             Response<List<Route>> result = mainResponse.getBody();
             if (result.getStatus() == 0) {
-                LOGGER.warn("[getRoutesByRouteIds][Get Route By Ids Failed][Fail msg: {}][TraceId: {}]", result.getMsg(), traceId);
                 return null;
             }
             
@@ -564,6 +570,19 @@ protected void executeBurstRequest(String route_service_url, HttpEntity<List<Str
             ActiveSpan.tag("error.msg", e.getMessage());
             LOGGER.error("[getRoutesByRouteIds][Get Route By Ids Failed][Error: {}][TraceId: {}]", e.getMessage(), traceId);
             return null;
+        }
+    }
+
+    private String generateSW8Header(String parentTraceId, int burstId) {
+        // Generate a valid SW8 header to properly link spans
+        // This is a simplified version - you'll need to implement proper header generation
+        return String.format("1-%s-%d", parentTraceId, burstId);
+    }
+
+    // Helper class for trace context management
+    private static class TracingContextHelper {
+        public static Trace continueTraceContext(String parentTraceId) {
+            return TracingContext.createLocalSpan("burst-request-" + parentTraceId);
         }
     }
 
