@@ -444,16 +444,73 @@ public class BasicServiceImpl implements BasicService {
         private final String route_service_url;
         private final HttpEntity<List<String>> requestEntity;
         private final int burstId;
+        private final String parentTraceId;
 
-        public BurstTask(String url, HttpEntity<List<String>> request, int id) {
+        public BurstTask(String url, HttpEntity<List<String>> request, int id, String traceId) {
             this.route_service_url = url;
             this.requestEntity = request;
             this.burstId = id;
+            this.parentTraceId = traceId;
         }
 
         @Override
+        @Trace(operationName = "executeBurstRequest")
         public void run() {
-            executeBurstRequest(route_service_url, requestEntity, burstId);
+            // Explicitly start burst span as child of parent trace
+            ActiveSpan.tag("burst.id", String.valueOf(burstId));
+            ActiveSpan.tag("burst.parentTrace", parentTraceId);
+            
+            try {
+                ResponseEntity<Response> response = restTemplate.exchange(
+                    route_service_url + "/api/v1/routeservice/routes/byIds/",
+                    HttpMethod.POST,
+                    requestEntity,
+                    Response.class
+                );
+                
+                if (response.getBody().getStatus() != 1) {
+                    ActiveSpan.tag("error", "true");
+                    ActiveSpan.tag("error.msg", response.getBody().getMsg());
+                }
+            } catch (Exception e) {
+                ActiveSpan.tag("error", "true");
+                ActiveSpan.tag("error.msg", e.getMessage());
+                LOGGER.error("[executeBurstRequest][Burst request {} failed]", burstId, e);
+            }
+        }
+    }
+
+    @TraceCrossThread
+    private class BurstController implements Runnable {
+        private final String route_service_url;
+        private final HttpEntity<List<String>> requestEntity;
+        private final String parentTraceId;
+
+        public BurstController(String url, HttpEntity<List<String>> request, String traceId) {
+            this.route_service_url = url;
+            this.requestEntity = request;
+            this.parentTraceId = traceId;
+        }
+
+        @Override
+        @Trace(operationName = "burstController")
+        public void run() {
+            ActiveSpan.tag("burst.started", "true");
+            ActiveSpan.tag("burst.parentTrace", parentTraceId);
+            
+            ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
+                for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
+                    final int burstId = i + 1;
+                    taskExecutor.execute(new BurstTask(route_service_url, requestEntity, burstId, parentTraceId));
+                }
+            }, 1000);
+
+            // Schedule burst termination
+            taskScheduler.schedule(() -> {
+                burstSchedule.cancel(false);
+                LOGGER.info("[burstController][Burst completed][Next burst possible in {} seconds]", 
+                          BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS);
+            }, Instant.now().plusSeconds(BURST_DURATION_SECONDS));
         }
     }
 
@@ -484,25 +541,9 @@ public class BasicServiceImpl implements BasicService {
                     
                 LOGGER.info("[getRoutesByRouteIds][Starting burst: {} requests/sec for {} seconds][TraceId: {}]", 
                            BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, traceId);
-                ActiveSpan.tag("burst.started", "true");
 
-                // Schedule fixed-rate bursts
-                ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
-                    CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
-                    
-                    for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
-                        final int burstId = i + 1;
-                        taskExecutor.execute(new BurstTask(route_service_url, requestEntity, burstId));
-                    }
-                    
-                }, 1000);
-
-                // Schedule burst termination
-                taskScheduler.schedule(() -> {
-                    burstSchedule.cancel(false);
-                    LOGGER.info("[getRoutesByRouteIds][Burst completed][Next burst possible in {} seconds]", 
-                              BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS);
-                }, Instant.now().plusSeconds(BURST_DURATION_SECONDS));
+                // Start burst controller with parent trace context
+                taskExecutor.execute(new BurstController(route_service_url, requestEntity, traceId));
             }
 
             // Process main response
@@ -518,32 +559,31 @@ public class BasicServiceImpl implements BasicService {
             LOGGER.error("[getRoutesByRouteIds][Get Route By Ids Failed][Error: {}]", e.getMessage());
             return null;
         }
-    }
 
-    @Trace(operationName = "executeBurstRequest") 
-    protected void executeBurstRequest(String route_service_url, HttpEntity<List<String>> requestEntity, int burstId) {
-        try {
-            ActiveSpan.tag("burst.id", String.valueOf(burstId));
-            ActiveSpan.tag("burst.type", "async");
+    // @Trace(operationName = "executeBurstRequest") 
+    // protected void executeBurstRequest(String route_service_url, HttpEntity<List<String>> requestEntity, int burstId) {
+    //     try {
+    //         ActiveSpan.tag("burst.id", String.valueOf(burstId));
+    //         ActiveSpan.tag("burst.type", "async");
             
-            // Execute request in separate trace segment
-            ResponseEntity<Response> response = restTemplate.exchange(
-                route_service_url + "/api/v1/routeservice/routes/byIds/",
-                HttpMethod.POST,
-                requestEntity,
-                Response.class
-            );
+    //         // Execute request in separate trace segment
+    //         ResponseEntity<Response> response = restTemplate.exchange(
+    //             route_service_url + "/api/v1/routeservice/routes/byIds/",
+    //             HttpMethod.POST,
+    //             requestEntity,
+    //             Response.class
+    //         );
             
-            if (response.getBody().getStatus() != 1) {
-                ActiveSpan.tag("error", "true");
-                ActiveSpan.tag("error.msg", response.getBody().getMsg());
-            }
-        } catch (Exception e) {
-            ActiveSpan.tag("error", "true");
-            ActiveSpan.tag("error.msg", e.getMessage());
-            LOGGER.error("[executeBurstRequest][Burst request {} failed]", burstId, e);
-        }
-    }
+    //         if (response.getBody().getStatus() != 1) {
+    //             ActiveSpan.tag("error", "true");
+    //             ActiveSpan.tag("error.msg", response.getBody().getMsg());
+    //         }
+    //     } catch (Exception e) {
+    //         ActiveSpan.tag("error", "true");
+    //         ActiveSpan.tag("error.msg", e.getMessage());
+    //         LOGGER.error("[executeBurstRequest][Burst request {} failed]", burstId, e);
+    //     }
+    // }
 
     private Route getRouteByRouteId(String routeId, HttpHeaders headers) {
         BasicServiceImpl.LOGGER.info("[getRouteByRouteId][Get Route By Id][Route ID：{}]", routeId);
