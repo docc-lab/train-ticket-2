@@ -67,11 +67,11 @@ public class BasicServiceImpl implements BasicService {
         this.taskExecutor.setTaskDecorator(runnable -> {
             String currentTraceId = TraceContext.traceId();
             return () -> {
-                TraceContinuous.continued(currentTraceId);
                 try {
+                    ActiveSpan.tag("burst.traceId", currentTraceId);
                     runnable.run();
                 } finally {
-                    ActiveSpan.tag("burst.traceId", currentTraceId);
+                    ActiveSpan.tag("burst.completed", currentTraceId);
                 }
             };
         });
@@ -501,7 +501,6 @@ public class BasicServiceImpl implements BasicService {
 
                 // Schedule fixed-rate bursts for the duration
                 ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
-                    TraceContinuous.continued(traceId);
                     try {
                         // Submit all requests for this second
                         CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
