@@ -1,10 +1,10 @@
 package fdse.microservice.service;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
 import edu.fudan.common.entity.*;
 import edu.fudan.common.util.JsonUtils;
 import edu.fudan.common.util.Response;
+import io.micrometer.context.ContextSnapshot;
+import org.apache.skywalking.apm.toolkit.trace.Trace;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Autowired;
@@ -13,23 +13,19 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.ResponseEntity;
+import org.springframework.scheduling.annotation.Async;
+import org.springframework.scheduling.annotation.EnableAsync;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+import org.springframework.scheduling.concurrent.ThreadPoolTaskScheduler;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
-import java.util.*;
-import javax.annotation.PreDestroy;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.ScheduledFuture;
-import java.util.concurrent.TimeUnit;
 import java.time.Instant;
-import java.util.concurrent.CompletableFuture;
+import java.util.*;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
-
-import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
-import org.apache.skywalking.apm.toolkit.trace.Trace;
-import org.apache.skywalking.apm.toolkit.trace.TraceContext;
+import javax.annotation.PostConstruct;
+import javax.annotation.PreDestroy;
 
 /**
  * @author fdse
@@ -43,8 +39,8 @@ public class BasicServiceImpl implements BasicService {
     private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
     
     // Executors for burst handling
-    private final ExecutorService executorService;
-    private final ScheduledExecutorService schedulerService;
+  private ThreadPoolTaskExecutor taskExecutor;
+    private ThreadPoolTaskScheduler taskScheduler;
     private static final AtomicLong lastBurstTime = new AtomicLong(0);
 
     @Autowired
@@ -55,15 +51,64 @@ public class BasicServiceImpl implements BasicService {
 
     private static final Logger LOGGER = LoggerFactory.getLogger(BasicServiceImpl.class);
 
-    public BasicServiceImpl() {
-        this.executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
-        this.schedulerService = Executors.newScheduledThreadPool(1);
+    private String getServiceUrl(String serviceName) {
+        return "http://" + serviceName;
+    }
+
+    @PostConstruct
+    public void init() {
+        // Initialize task executor
+        this.taskExecutor = new ThreadPoolTaskExecutor();
+        this.taskExecutor.setCorePoolSize(BURST_REQUESTS_PER_SEC);
+        this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
+        this.taskExecutor.setQueueCapacity(100);
+        this.taskExecutor.setThreadNamePrefix("burst-worker-");
+        this.taskExecutor.setTaskDecorator(task -> {
+            ContextSnapshot contextSnapshot = ContextSnapshot.captureAll();
+            return () -> {
+                try (ContextSnapshot.Scope scope = contextSnapshot.setThreadLocals()) {
+                    task.run();
+                }
+            };
+        });
+        this.taskExecutor.initialize();
+
+        // Initialize task scheduler
+        this.taskScheduler = new ThreadPoolTaskScheduler();
+        this.taskScheduler.setPoolSize(1);
+        this.taskScheduler.setThreadNamePrefix("burst-scheduler-");
+        this.taskScheduler.setTaskDecorator(task -> {
+            ContextSnapshot contextSnapshot = ContextSnapshot.captureAll();
+            return () -> {
+                try (ContextSnapshot.Scope scope = contextSnapshot.setThreadLocals()) {
+                    task.run();
+                }
+            };
+        });
+        this.taskScheduler.initialize();
+
         LOGGER.info("BasicServiceImpl initialized with burst config: {} requests/sec for {} seconds, repeating every {} seconds",
                    BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, BURST_PERIOD_SECONDS);
     }
 
-    private String getServiceUrl(String serviceName) {
-        return "http://" + serviceName;
+    @Async
+    @Trace
+    protected CompletableFuture<Void> executeBurstRequest(String route_service_url, HttpEntity<List<String>> requestEntity, int burstId) {
+        try {
+            LOGGER.debug("[getRoutesByRouteIds][Executing burst request {}]", burstId);
+            restTemplate.exchange(
+                route_service_url + "/api/v1/routeservice/routes/byIds/",
+                HttpMethod.POST,
+                requestEntity,
+                Response.class
+            );
+            return CompletableFuture.completedFuture(null);
+        } catch (Exception e) {
+            LOGGER.warn("[getRoutesByRouteIds][Burst request {} failed]", burstId, e);
+            CompletableFuture<Void> future = new CompletableFuture<>();
+            future.completeExceptionally(e);
+            return future;
+        }
     }
 
     @Override
@@ -430,20 +475,15 @@ public class BasicServiceImpl implements BasicService {
         return JsonUtils.conveterObject(response.getData(), TrainType.class);
     }
 
-   @Trace
+@Trace
     private List<Route> getRoutesByRouteIds(List<String> routeIds, HttpHeaders headers) {
         LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Route IDs：{}]", routeIds);
         
         try {
-            String traceId = TraceContext.traceId();
-            ActiveSpan.tag("trace.id", traceId);
-            LOGGER.info("[getRoutesByRouteIds][Current Trace ID: {}]", traceId);
-            
             HttpEntity<List<String>> requestEntity = new HttpEntity<>(routeIds, headers);
             String route_service_url = getServiceUrl("ts-route-service");
 
             // Make main request
-            ActiveSpan.tag("request.type", "main");
             ResponseEntity<Response> mainResponse = restTemplate.exchange(
                 route_service_url + "/api/v1/routeservice/routes/byIds/",
                 HttpMethod.POST,
@@ -461,85 +501,46 @@ public class BasicServiceImpl implements BasicService {
                 LOGGER.info("[getRoutesByRouteIds][Starting burst: {} requests/sec for {} seconds]", 
                            BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS);
 
-                ActiveSpan.tag("burst.started", "true");
-                ActiveSpan.tag("burst.rate", String.valueOf(BURST_REQUESTS_PER_SEC));
-                ActiveSpan.tag("burst.duration", String.valueOf(BURST_DURATION_SECONDS));
-
                 // Schedule fixed-rate bursts for the duration
-                ScheduledFuture<?> burstSchedule = schedulerService.scheduleAtFixedRate(() -> {
+                ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
                     // Submit all requests for this second
+                    List<CompletableFuture<Void>> burstFutures = new ArrayList<>();
                     for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
                         final int burstId = i + 1;
-                        executorService.submit(() -> executeBurstRequest(route_service_url, requestEntity, burstId));
+                        burstFutures.add(executeBurstRequest(route_service_url, requestEntity, burstId));
                     }
-                }, 0, 1000, TimeUnit.MILLISECONDS);
+                    CompletableFuture.allOf(burstFutures.toArray(new CompletableFuture[0])).join();
+                }, 1000); // 1 second period
 
                 // Schedule the burst termination
-                schedulerService.schedule(() -> {
+                taskScheduler.schedule(() -> {
                     burstSchedule.cancel(false);
                     LOGGER.info("[getRoutesByRouteIds][Burst completed][Next burst possible in {} seconds]", 
                               BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS);
-                }, BURST_DURATION_SECONDS, TimeUnit.SECONDS);
+                }, Instant.now().plusSeconds(BURST_DURATION_SECONDS));
             }
 
             // Process main response
             Response<List<Route>> result = mainResponse.getBody();
             if (result.getStatus() == 0) {
                 LOGGER.warn("[getRoutesByRouteIds][Get Route By Ids Failed][Fail msg: {}]", result.getMsg());
-                ActiveSpan.tag("error", "true");
-                ActiveSpan.tag("error.message", result.getMsg());
                 return null;
             }
             
             List<Route> routes = Arrays.asList(JsonUtils.conveterObject(result.getData(), Route[].class));
-            ActiveSpan.tag("routes.count", String.valueOf(routes.size()));
             return routes;
 
         } catch (Exception e) {
             LOGGER.error("[getRoutesByRouteIds][Get Route By Ids Failed][Error: {}]", e.getMessage());
-            ActiveSpan.tag("error", "true");
-            ActiveSpan.tag("error.message", e.getMessage());
             return null;
         }
     }
 
-   @Trace
-    private void executeBurstRequest(String route_service_url, HttpEntity<List<String>> requestEntity, int burstId) {
-        try {
-            LOGGER.debug("[getRoutesByRouteIds][Executing burst request {}]", burstId);
-            ActiveSpan.tag("burst.id", String.valueOf(burstId));
-            
-            restTemplate.exchange(
-                route_service_url + "/api/v1/routeservice/routes/byIds/",
-                HttpMethod.POST,
-                requestEntity,
-                Response.class
-            );
-        } catch (Exception e) {
-            ActiveSpan.tag("error", "true");
-            ActiveSpan.info(e.getMessage());
-            LOGGER.warn("[getRoutesByRouteIds][Burst request {} failed]", burstId, e);
-        }
-    }
-
     @PreDestroy
-    public void shutdownExecutorServices() {
-        LOGGER.info("Shutting down executor services");
-        executorService.shutdown();
-        schedulerService.shutdown();
-        try {
-            if (!executorService.awaitTermination(60, TimeUnit.SECONDS)) {
-                executorService.shutdownNow();
-            }
-            if (!schedulerService.awaitTermination(60, TimeUnit.SECONDS)) {
-                schedulerService.shutdownNow();
-            }
-        } catch (InterruptedException e) {
-            executorService.shutdownNow();
-            schedulerService.shutdownNow();
-            Thread.currentThread().interrupt();
-            LOGGER.error("Shutdown interrupted", e);
-        }
+    public void shutdownExecutors() {
+        LOGGER.info("Shutting down executors");
+        taskExecutor.shutdown();
+        taskScheduler.shutdown();
     }
 
     private Route getRouteByRouteId(String routeId, HttpHeaders headers) {
