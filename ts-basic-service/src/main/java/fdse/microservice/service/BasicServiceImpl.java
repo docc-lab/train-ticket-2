@@ -69,13 +69,12 @@ public class BasicServiceImpl implements BasicService {
         this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
         this.taskExecutor.setQueueCapacity(100);
         this.taskExecutor.setThreadNamePrefix("burst-worker-");
-        this.taskExecutor.setTaskDecorator(traceContextDecorator);  // Use autowired decorator
+        this.taskExecutor.setTaskDecorator(traceContextDecorator);
         this.taskExecutor.initialize();
 
         this.taskScheduler = new ThreadPoolTaskScheduler();
         this.taskScheduler.setPoolSize(1);
-        this.taskScheduler.setThreadNamePrefix("burst-scheduler-");
-        this.taskScheduler.setTaskDecorator(traceContextDecorator);  // Use autowired decorator
+        this.taskScheduler.setThreadNamePrefix("burst-scheduler-"); 
         this.taskScheduler.initialize();
     }
 
