@@ -23,6 +23,8 @@ import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
 import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.TraceContext;
+import org.apache.skywalking.apm.toolkit.trace.ContextSnapshot;
+import org.apache.skywalking.apm.toolkit.trace.ContextManager;
 
 import java.time.Instant;
 import java.util.*;
@@ -444,19 +446,20 @@ public class BasicServiceImpl implements BasicService {
         private final String route_service_url;
         private final HttpEntity<List<String>> requestEntity;
         private final int burstId;
-        private final ContextSnapshot contextSnapshot;  // Add this
+        private final org.apache.skywalking.apm.toolkit.trace.ContextSnapshot contextSnapshot;
 
-        public BurstTask(String url, HttpEntity<List<String>> request, int id, ContextSnapshot snapshot) {
+        public BurstTask(String url, HttpEntity<List<String>> request, int id, 
+                        org.apache.skywalking.apm.toolkit.trace.ContextSnapshot snapshot) {
             this.route_service_url = url;
             this.requestEntity = request;
             this.burstId = id;
-            this.contextSnapshot = snapshot;  // Store snapshot
+            this.contextSnapshot = snapshot;
         }
 
         @Override
         @Trace(operationName = "basicservice/burstRequest") 
         public void run() {
-            try (ContextManager.Continuation ignored = ContextManager.continued(contextSnapshot)) {
+            try {
                 ActiveSpan.tag("burst.id", String.valueOf(burstId));
                 ActiveSpan.tag("burst.type", "fanout");
                 
@@ -483,23 +486,20 @@ public class BasicServiceImpl implements BasicService {
     private class BurstController implements Runnable {
         private final String route_service_url;
         private final HttpEntity<List<String>> requestEntity;
-        private final ContextSnapshot contextSnapshot;
+        private final org.apache.skywalking.apm.toolkit.trace.ContextSnapshot contextSnapshot;
 
         public BurstController(String url, HttpEntity<List<String>> request) {
             this.route_service_url = url;
             this.requestEntity = request;
-            this.contextSnapshot = ContextManager.capture(); // Capture context when created
+            this.contextSnapshot = ContextManager.createEntrySpan("burstController", null);
         }
 
         @Override
         @Trace(operationName = "basicservice/burstController")
         public void run() {
-            try (ContextManager.Continuation ignored = ContextManager.continued(contextSnapshot)) {
+            try {
                 ActiveSpan.tag("burst.started", "true");
                 ActiveSpan.tag("burst.type", "controller");
-
-                // Get a new context snapshot for child tasks
-                final ContextSnapshot taskSnapshot = ContextManager.capture();
 
                 ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
                     for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
@@ -508,7 +508,7 @@ public class BasicServiceImpl implements BasicService {
                             route_service_url, 
                             requestEntity,
                             burstId,
-                            taskSnapshot  // Pass context to tasks
+                            contextSnapshot
                         ));
                     }
                 }, 1000);
