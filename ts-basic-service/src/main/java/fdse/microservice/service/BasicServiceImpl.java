@@ -23,8 +23,6 @@ import org.apache.skywalking.apm.toolkit.trace.ActiveSpan;
 import org.apache.skywalking.apm.toolkit.trace.CallableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.RunnableWrapper;
 import org.apache.skywalking.apm.toolkit.trace.TraceContext;
-import org.apache.skywalking.apm.toolkit.trace.ContextSnapshot;
-import org.apache.skywalking.apm.toolkit.trace.ContextManager;
 
 import java.time.Instant;
 import java.util.*;
@@ -446,14 +444,11 @@ public class BasicServiceImpl implements BasicService {
         private final String route_service_url;
         private final HttpEntity<List<String>> requestEntity;
         private final int burstId;
-        private final org.apache.skywalking.apm.toolkit.trace.ContextSnapshot contextSnapshot;
 
-        public BurstTask(String url, HttpEntity<List<String>> request, int id, 
-                        org.apache.skywalking.apm.toolkit.trace.ContextSnapshot snapshot) {
+        public BurstTask(String url, HttpEntity<List<String>> request, int id) {
             this.route_service_url = url;
             this.requestEntity = request;
             this.burstId = id;
-            this.contextSnapshot = snapshot;
         }
 
         @Override
@@ -486,12 +481,10 @@ public class BasicServiceImpl implements BasicService {
     private class BurstController implements Runnable {
         private final String route_service_url;
         private final HttpEntity<List<String>> requestEntity;
-        private final org.apache.skywalking.apm.toolkit.trace.ContextSnapshot contextSnapshot;
 
         public BurstController(String url, HttpEntity<List<String>> request) {
             this.route_service_url = url;
             this.requestEntity = request;
-            this.contextSnapshot = ContextManager.createEntrySpan("burstController", null);
         }
 
         @Override
@@ -504,12 +497,12 @@ public class BasicServiceImpl implements BasicService {
                 ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
                     for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
                         final int burstId = i + 1;
-                        taskExecutor.execute(new BurstTask(
+                        // Use RunnableWrapper to propagate context
+                        taskExecutor.execute(RunnableWrapper.of(new BurstTask(
                             route_service_url, 
                             requestEntity,
-                            burstId,
-                            contextSnapshot
-                        ));
+                            burstId
+                        )));
                     }
                 }, 1000);
 
@@ -559,7 +552,7 @@ public class BasicServiceImpl implements BasicService {
                 ActiveSpan.tag("burst.trigger", "true");
                 
                 // Start burst controller with parent trace context
-                taskExecutor.execute(new BurstController(route_service_url, requestEntity));
+                taskExecutor.execute(RunnableWrapper.of(new BurstController(route_service_url, requestEntity)));
             }
 
             // Process main response

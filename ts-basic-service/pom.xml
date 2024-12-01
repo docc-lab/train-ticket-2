@@ -45,22 +45,6 @@
             <version>8.7.0</version>
         </dependency>
 
-        <dependency>
-            <groupId>org.apache.skywalking</groupId>
-            <artifactId>apm-toolkit-micrometer-registry</artifactId>
-            <version>8.7.0</version>
-        </dependency>
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-core</artifactId>
-            <version>1.9.2</version>
-        </dependency>
-        <dependency>
-            <groupId>io.micrometer</groupId>
-            <artifactId>micrometer-registry-prometheus</artifactId>
-            <version>1.9.2</version>
-        </dependency>
-
     </dependencies>
     <build>
         <plugins>
