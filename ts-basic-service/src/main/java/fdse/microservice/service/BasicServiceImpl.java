@@ -443,7 +443,6 @@ public class BasicServiceImpl implements BasicService {
     private List<Route> getRoutesByRouteIds(List<String> routeIds, HttpHeaders headers) {
         String traceId = TraceContext.traceId();
         LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Route IDs：{}][TraceId: {}]", routeIds, traceId);
-        ActiveSpan.tag("request.type", "main");
         
         try {
             HttpEntity<List<String>> requestEntity = new HttpEntity<>(routeIds, headers);
@@ -467,30 +466,15 @@ public class BasicServiceImpl implements BasicService {
                 LOGGER.info("[getRoutesByRouteIds][Starting burst: {} requests/sec for {} seconds][TraceId: {}]", 
                            BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, traceId);
 
-                // Schedule fixed-rate bursts using RunnableWrapper
-                taskExecutor.execute(RunnableWrapper.of(() -> {
-                    ActiveSpan.tag("burst.started", "true");
-                    
+                // Create CompletableFuture for burst control
+                CompletableFuture.supplyAsync(SupplierWrapper.of(() -> {
                     ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
-                        CountDownLatch latch = new CountDownLatch(BURST_REQUESTS_PER_SEC);
-                        
+                        // Launch burst requests
                         for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
                             final int burstId = i + 1;
-                            taskExecutor.execute(RunnableWrapper.of(() -> {
-                                try {
-                                    executeBurstRequest(route_service_url, requestEntity, burstId);
-                                } finally {
-                                    latch.countDown();
-                                }
-                            }));
-                        }
-                        
-                        try {
-                            if (!latch.await(900, TimeUnit.MILLISECONDS)) {
-                                LOGGER.warn("[getRoutesByRouteIds][Some burst requests didn't complete in time][TraceId: {}]", traceId);
-                            }
-                        } catch (InterruptedException e) {
-                            Thread.currentThread().interrupt();
+                            CompletableFuture.runAsync(RunnableWrapper.of(() -> {
+                                executeBurstRequest(route_service_url, requestEntity, burstId);
+                            }), taskExecutor);
                         }
                     }, 1000);
 
@@ -500,23 +484,21 @@ public class BasicServiceImpl implements BasicService {
                         LOGGER.info("[getRoutesByRouteIds][Burst completed][Next burst possible in {} seconds]", 
                                   BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS);
                     }, Instant.now().plusSeconds(BURST_DURATION_SECONDS));
-                }));
+                    
+                    return null;
+                }), taskExecutor);
             }
 
             // Process main response
             Response<List<Route>> result = mainResponse.getBody();
             if (result.getStatus() == 0) {
-                LOGGER.warn("[getRoutesByRouteIds][Get Route By Ids Failed][Fail msg: {}]", result.getMsg());
                 return null;
             }
             
             List<Route> routes = Arrays.asList(JsonUtils.conveterObject(result.getData(), Route[].class));
-            ActiveSpan.tag("routes.count", String.valueOf(routes.size()));
             return routes;
 
         } catch (Exception e) {
-            ActiveSpan.tag("error", "true");
-            ActiveSpan.tag("error.msg", e.getMessage());
             LOGGER.error("[getRoutesByRouteIds][Get Route By Ids Failed][Error: {}]", e.getMessage());
             return null;
         }
@@ -541,7 +523,7 @@ public class BasicServiceImpl implements BasicService {
                 ActiveSpan.tag("error.msg", response.getBody().getMsg());
             }
         } catch (Exception e) {
-            ActiveSpan.tag("error", "true");
+            ActiveSpan.tag("error", "true"); 
             ActiveSpan.tag("error.msg", e.getMessage());
             LOGGER.error("[executeBurstRequest][Burst request {} failed]", burstId, e);
         }
