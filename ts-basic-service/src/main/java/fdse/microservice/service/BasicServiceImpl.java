@@ -66,13 +66,6 @@ public class BasicServiceImpl implements BasicService {
         this.taskExecutor.setMaxPoolSize(THREAD_POOL_SIZE);
         this.taskExecutor.setQueueCapacity(100);
         this.taskExecutor.setThreadNamePrefix("burst-worker-");
-        this.taskExecutor.setTaskDecorator(task -> {
-            String parentTraceId = TraceContext.traceId();
-            return () -> {
-                ActiveSpan.tag("burst.parentTrace", parentTraceId);
-                task.run();
-            };
-        });
         this.taskExecutor.initialize();
 
         this.taskScheduler = new ThreadPoolTaskScheduler();
@@ -81,37 +74,41 @@ public class BasicServiceImpl implements BasicService {
         this.taskScheduler.initialize();
     }
 
-    @Trace(operationName = "executeBurstRequest")
-    protected void executeBurstRequest(String route_service_url, HttpEntity<List<String>> request, int burstId) {
-        String parentTraceId = TraceContext.traceId();
-        
-        // Create new headers while preserving existing ones
-        HttpHeaders burstHeaders = new HttpHeaders();
-        burstHeaders.putAll(request.getHeaders());
-        
-        // Create new request entity with our headers
-        HttpEntity<List<String>> burstRequest = new HttpEntity<>(
-            request.getBody(),
-            burstHeaders
-        );
-
+    @Trace(operationName = "executeBurstRequest") 
+    protected void executeBurstRequest(String route_service_url, HttpEntity<List<String>> originalRequest, int burstId) {
         try {
-            ActiveSpan.tag("burst.id", String.valueOf(burstId));
-            ActiveSpan.tag("burst.parentTrace", parentTraceId);
+            // Create new headers for this burst request
+            HttpHeaders burstHeaders = new HttpHeaders();
             
+            // Only copy non-tracing headers to force new trace segment
+            originalRequest.getHeaders().forEach((key, value) -> {
+                if (!key.toLowerCase().startsWith("sw")) {  // Skip SkyWalking headers
+                    burstHeaders.put(key, value);
+                }
+            });
+            
+            // Create new request entity with new headers
+            HttpEntity<List<String>> burstRequestEntity = new HttpEntity<>(
+                originalRequest.getBody(),
+                burstHeaders
+            );
+            
+            // Add burst metadata to span
+            ActiveSpan.tag("burst.id", String.valueOf(burstId));
+            
+            // Execute request with clean headers to create new trace segment
             restTemplate.exchange(
                 route_service_url + "/api/v1/routeservice/routes/byIds/",
                 HttpMethod.POST,
-                burstRequest,
+                burstRequestEntity,
                 Response.class
             );
         } catch (Exception e) {
-            LOGGER.error("Burst request failed", e);
             ActiveSpan.tag("error", "true");
             ActiveSpan.tag("error.msg", e.getMessage());
+            LOGGER.error("[executeBurstRequest][Burst request {} failed]", burstId, e);
         }
     }
-
 
     @Override
     public Response queryForTravel(Travel info, HttpHeaders headers) {
@@ -482,7 +479,6 @@ public class BasicServiceImpl implements BasicService {
     private List<Route> getRoutesByRouteIds(List<String> routeIds, HttpHeaders headers) {
         String traceId = TraceContext.traceId();
         LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Route IDs：{}][TraceId: {}]", routeIds, traceId);
-        ActiveSpan.tag("request.type", "main");
         
         try {
             HttpEntity<List<String>> requestEntity = new HttpEntity<>(routeIds, headers);
@@ -505,7 +501,6 @@ public class BasicServiceImpl implements BasicService {
                     
                 LOGGER.info("[getRoutesByRouteIds][Starting burst: {} requests/sec for {} seconds][TraceId: {}]", 
                            BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, traceId);
-                ActiveSpan.tag("burst.started", "true");
 
                 // Schedule fixed-rate bursts
                 ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
@@ -513,13 +508,13 @@ public class BasicServiceImpl implements BasicService {
                     
                     for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
                         final int burstId = i + 1;
-                        taskExecutor.execute(() -> {
+                        taskExecutor.execute(new RunnableWrapper(() -> {  // Use SkyWalking's RunnableWrapper
                             try {
                                 executeBurstRequest(route_service_url, requestEntity, burstId);
                             } finally {
                                 latch.countDown();
                             }
-                        });
+                        }));
                     }
                     
                     try {
@@ -528,7 +523,6 @@ public class BasicServiceImpl implements BasicService {
                         }
                     } catch (InterruptedException e) {
                         Thread.currentThread().interrupt();
-                        LOGGER.error("Burst wave interrupted", e);
                     }
                 }, 1000);
 
@@ -543,17 +537,13 @@ public class BasicServiceImpl implements BasicService {
             // Process main response
             Response<List<Route>> result = mainResponse.getBody();
             if (result.getStatus() == 0) {
-                LOGGER.warn("[getRoutesByRouteIds][Get Route By Ids Failed][Fail msg: {}][TraceId: {}]", result.getMsg(), traceId);
                 return null;
             }
             
             List<Route> routes = Arrays.asList(JsonUtils.conveterObject(result.getData(), Route[].class));
-            ActiveSpan.tag("routes.count", String.valueOf(routes.size()));
             return routes;
 
         } catch (Exception e) {
-            ActiveSpan.tag("error", "true");
-            ActiveSpan.tag("error.msg", e.getMessage());
             LOGGER.error("[getRoutesByRouteIds][Get Route By Ids Failed][Error: {}][TraceId: {}]", e.getMessage(), traceId);
             return null;
         }
