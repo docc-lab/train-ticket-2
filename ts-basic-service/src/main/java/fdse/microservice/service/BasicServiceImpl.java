@@ -502,6 +502,18 @@ public class BasicServiceImpl implements BasicService {
             this.parentTraceId = traceId;
         }
 
+    @TraceCrossThread
+    private class BurstController implements Runnable {
+        private final String route_service_url;
+        private final HttpEntity<List<String>> requestEntity;
+        private final String parentTraceId;
+
+        public BurstController(String url, HttpEntity<List<String>> request, String traceId) {
+            this.route_service_url = url;
+            this.requestEntity = request;
+            this.parentTraceId = traceId;
+        }
+
         @Override
         @Trace(operationName = "basicservice/burstController")
         public void run() {
@@ -510,28 +522,25 @@ public class BasicServiceImpl implements BasicService {
                 ActiveSpan.tag("burst.parentTrace", parentTraceId);
                 ActiveSpan.tag("burst.type", "controller");
 
-                // Create a CountDownLatch for the burst period
-                CountDownLatch burstLatch = new CountDownLatch(BURST_DURATION_SECONDS);
-                
+                // Schedule fixed-rate bursts
                 ScheduledFuture<?> burstSchedule = taskScheduler.scheduleAtFixedRate(() -> {
                     try {
-                        // Launch burst requests
                         for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
                             final int burstId = i + 1;
                             taskExecutor.execute(new BurstTask(route_service_url, requestEntity, burstId, parentTraceId));
                         }
-                        burstLatch.countDown();
                     } catch (Exception e) {
                         LOGGER.error("Error in burst wave", e);
                     }
-                }, 0, 1000, TimeUnit.MILLISECONDS);
+                }, 1000); // 1 second fixed rate
 
-                // Wait for burst period to complete
-                burstLatch.await();
-                burstSchedule.cancel(false);
-                
-                LOGGER.info("[burstController][Burst completed][Next burst possible in {} seconds]", 
-                          BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS);
+                // Schedule burst termination after duration
+                taskScheduler.schedule(() -> {
+                    burstSchedule.cancel(false);
+                    LOGGER.info("[burstController][Burst completed][Next burst possible in {} seconds]", 
+                            BURST_PERIOD_SECONDS - BURST_DURATION_SECONDS);
+                }, Instant.now().plusSeconds(BURST_DURATION_SECONDS));
+
             } catch (Exception e) {
                 LOGGER.error("Error in burst controller", e);
                 ActiveSpan.tag("error", "true");
