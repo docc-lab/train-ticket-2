@@ -540,7 +540,7 @@ public class BasicServiceImpl implements BasicService {
                 lastBurstTime.compareAndSet(lastBurst, currentTime)) {
                     
                 LOGGER.info("[getRoutesByRouteIds][Starting burst: {} requests/sec for {} seconds][TraceId: {}]", 
-                           BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, traceId);
+                        BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, traceId);
 
                 // Start burst controller with parent trace context
                 taskExecutor.execute(new BurstController(route_service_url, requestEntity, traceId));
@@ -559,6 +559,7 @@ public class BasicServiceImpl implements BasicService {
             LOGGER.error("[getRoutesByRouteIds][Get Route By Ids Failed][Error: {}]", e.getMessage());
             return null;
         }
+    }
 
     // @Trace(operationName = "executeBurstRequest") 
     // protected void executeBurstRequest(String route_service_url, HttpEntity<List<String>> requestEntity, int burstId) {
