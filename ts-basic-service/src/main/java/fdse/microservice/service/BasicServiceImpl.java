@@ -505,12 +505,7 @@ public class BasicServiceImpl implements BasicService {
                             try {
                                 // This will be a fanout span that connects to the main request
                                 ActiveSpan.tag("burst.id", String.valueOf(burstId));
-                                restTemplate.exchange(
-                                    route_service_url + "/api/v1/routeservice/routes/byIds/",
-                                    HttpMethod.POST,
-                                    requestEntity,
-                                    Response.class
-                                );
+                                makeRouteRequest(route_service_url, requestEntity);
                             } catch (Exception e) {
                                 LOGGER.error("[burstRequest][Burst request {} failed]", burstId, e);
                             }
@@ -524,15 +519,14 @@ public class BasicServiceImpl implements BasicService {
         }
     }
 
-        @Trace
-        private void makeRouteRequest(String url, HttpEntity<List<String>> request) {
-            ResponseEntity<Response> response = restTemplate.exchange(
-                url + "/api/v1/routeservice/routes/byIds/",
-                HttpMethod.POST, 
-                request,
-                Response.class
-            );
-        }
+    @Trace
+    private void makeRouteRequest(String url, HttpEntity<List<String>> request) {
+        ResponseEntity<Response> response = restTemplate.exchange(
+            url + "/api/v1/routeservice/routes/byIds/",
+            HttpMethod.POST, 
+            request,
+            Response.class
+        );
     }
 
 
