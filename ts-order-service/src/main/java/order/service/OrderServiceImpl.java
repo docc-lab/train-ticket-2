@@ -90,8 +90,9 @@ public class OrderServiceImpl implements OrderService {
     @Override
     public Response create(Order order, HttpHeaders headers) {
         OrderServiceImpl.LOGGER.info("[create][Create Order][Ready to Create Order]");
-        ArrayList<Order> accountOrders = orderRepository.findByAccountId(order.getAccountId());
-        if (accountOrders.contains(order)) {
+
+        Optional<Order> matchingOrder = orderRepository.findByAccountIdAndId(order.getAccountId(), order.getId());
+        if (matchingOrder.isPresent()) {
             OrderServiceImpl.LOGGER.error("[create][Order Create Fail][Order already exists][OrderId: {}]", order.getId());
             return new Response<>(0, "Order already exist", null);
         } else {
@@ -100,6 +101,17 @@ public class OrderServiceImpl implements OrderService {
             OrderServiceImpl.LOGGER.info("[create][Order Create Success][Order Price][OrderId:{} , Price: {}]",order.getId(),order.getPrice());
             return new Response<>(1, success, order);
         }
+
+//        ArrayList<Order> accountOrders = orderRepository.findByAccountId(order.getAccountId());
+//        if (accountOrders.contains(order)) {
+//            OrderServiceImpl.LOGGER.error("[create][Order Create Fail][Order already exists][OrderId: {}]", order.getId());
+//            return new Response<>(0, "Order already exist", null);
+//        } else {
+//            order.setId(UUID.randomUUID().toString());
+//            order=orderRepository.save(order);
+//            OrderServiceImpl.LOGGER.info("[create][Order Create Success][Order Price][OrderId:{} , Price: {}]",order.getId(),order.getPrice());
+//            return new Response<>(1, success, order);
+//        }
     }
 
     @Override
