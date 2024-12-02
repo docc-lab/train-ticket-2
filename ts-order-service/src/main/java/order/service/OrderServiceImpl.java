@@ -475,26 +475,41 @@ public class OrderServiceImpl implements OrderService {
     @Override
     public Response checkSecurityAboutOrder(Date dateFrom, String accountId, HttpHeaders headers) {
         OrderSecurity result = new OrderSecurity();
-        ArrayList<Order> orders = orderRepository.findByAccountId(accountId);
-        int countOrderInOneHour = 0;
-        int countTotalValidOrder = 0;
-        Calendar ca = Calendar.getInstance();
-        ca.setTime(dateFrom);
-        ca.add(Calendar.HOUR_OF_DAY, -1);
-        dateFrom = ca.getTime();
-        for (Order order : orders) {
-            if (order.getStatus() == OrderStatus.NOTPAID.getCode() ||
-                    order.getStatus() == OrderStatus.PAID.getCode() ||
-                    order.getStatus() == OrderStatus.COLLECTED.getCode()) {
-                countTotalValidOrder += 1;
-            }
-            Date boughtDate = StringUtils.String2Date(order.getBoughtDate());
-            if (boughtDate.after(dateFrom)) {
-                countOrderInOneHour += 1;
-            }
-        }
-        result.setOrderNumInLastOneHour(countOrderInOneHour);
-        result.setOrderNumOfValidOrder(countTotalValidOrder);
+//        ArrayList<Order> orders = orderRepository.findByAccountId(accountId);
+//        int countOrderInOneHour = 0;
+//        int countTotalValidOrder = 0;
+//        Calendar ca = Calendar.getInstance();
+//        ca.setTime(dateFrom);
+//        ca.add(Calendar.HOUR_OF_DAY, -1);
+//        dateFrom = ca.getTime();
+//        for (Order order : orders) {
+//            if (order.getStatus() == OrderStatus.NOTPAID.getCode() ||
+//                    order.getStatus() == OrderStatus.PAID.getCode() ||
+//                    order.getStatus() == OrderStatus.COLLECTED.getCode()) {
+//                countTotalValidOrder += 1;
+//            }
+//            Date boughtDate = StringUtils.String2Date(order.getBoughtDate());
+//            if (boughtDate.after(dateFrom)) {
+//                countOrderInOneHour += 1;
+//            }
+//        }
+
+        ArrayList<Order> notPaidOrders = orderRepository
+            .findByAccountIdAndStatus(accountId,
+                OrderStatus.NOTPAID.getCode());
+        ArrayList<Order> paidOrders = orderRepository
+            .findByAccountIdAndStatus(accountId,
+                OrderStatus.PAID.getCode());
+        ArrayList<Order> collectedOrders = orderRepository
+            .findByAccountIdAndStatus(accountId,
+                OrderStatus.COLLECTED.getCode());
+
+//        result.setOrderNumInLastOneHour(countOrderInOneHour);
+        result.setOrderNumInLastOneHour(1);
+//        result.setOrderNumOfValidOrder(countTotalValidOrder);
+        result.setOrderNumOfValidOrder(
+            notPaidOrders.size() + paidOrders.size() + collectedOrders.size()
+        );
         return new Response<>(1, "Check Security Success . ", result);
     }
 
