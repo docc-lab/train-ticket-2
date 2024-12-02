@@ -539,10 +539,8 @@ public class BasicServiceImpl implements BasicService {
             HttpEntity<List<String>> requestEntity = new HttpEntity<>(routeIds, headers);
             String route_service_url = getServiceUrl("ts-route-service");
 
-            // Create a reference span for fanout operations to connect to
-            ActiveSpan.tag("request.type", "main");
-            
-            // Make main request
+            // Make main request and get its span context
+            final SegmentRef parentRef = TraceContext.spanRef();
             ResponseEntity<Response> mainResponse = restTemplate.exchange(
                 route_service_url + "/api/v1/routeservice/routes/byIds/",
                 HttpMethod.POST,
@@ -557,19 +555,33 @@ public class BasicServiceImpl implements BasicService {
             }
             List<Route> routes = Arrays.asList(JsonUtils.conveterObject(result.getData(), Route[].class));
 
-            // Check if we should start a burst
-            long currentTime = Instant.now().getEpochSecond();
-            long lastBurst = lastBurstTime.get();
-            
-            if (currentTime - lastBurst >= BURST_PERIOD_SECONDS && 
-                lastBurstTime.compareAndSet(lastBurst, currentTime)) {
-                    
-                LOGGER.info("[getRoutesByRouteIds][Starting burst: {} requests/sec for {} seconds][TraceId: {}]", 
-                        BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, traceId);
-
-                // Execute burst controller directly within this span context
-                ActiveSpan.tag("burst.trigger", "true");
-                new BurstController(route_service_url, requestEntity).run();
+            // Check if we should start burst
+            if (shouldStartBurst()) {
+                LOGGER.info("[getRoutesByRouteIds][Starting burst][TraceId: {}]", traceId);
+                
+                // Use CompletableFuture to handle fanout tasks
+                for (int i = 0; i < BURST_REQUESTS_PER_SEC * BURST_DURATION_SECONDS; i++) {
+                    final int burstId = i + 1;
+                    CompletableFuture.runAsync(() -> {
+                        try (ContextSnapshot contextSnapshot = ContextManager.capture()) {
+                            ContextManager.continued(contextSnapshot);
+                            ContextManager.createLocalSpan("burstRequest_" + burstId)
+                                .setComponent(ComponentsDefine.SPRING_REST_TEMPLATE)
+                                .setLayer(SpanLayer.HTTP);
+                            
+                            restTemplate.exchange(
+                                route_service_url + "/api/v1/routeservice/routes/byIds/",
+                                HttpMethod.POST,
+                                requestEntity,
+                                Response.class
+                            );
+                        } catch (Exception e) {
+                            LOGGER.error("[burstRequest][Burst request {} failed]", burstId, e);
+                        } finally {
+                            ContextManager.stopSpan();
+                        }
+                    }, taskExecutor);
+                }
             }
 
             return routes;
@@ -578,6 +590,13 @@ public class BasicServiceImpl implements BasicService {
             LOGGER.error("[getRoutesByRouteIds][Get Route By Ids Failed][Error: {}]", e.getMessage());
             return null;
         }
+    }
+
+    private boolean shouldStartBurst() {
+        long currentTime = Instant.now().getEpochSecond();
+        long lastBurst = lastBurstTime.get();
+        return currentTime - lastBurst >= BURST_PERIOD_SECONDS && 
+            lastBurstTime.compareAndSet(lastBurst, currentTime);
     }
 
 
