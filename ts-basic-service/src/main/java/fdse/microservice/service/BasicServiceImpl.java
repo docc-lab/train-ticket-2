@@ -534,13 +534,12 @@ public class BasicServiceImpl implements BasicService {
     private List<Route> getRoutesByRouteIds(List<String> routeIds, HttpHeaders headers) {
         String traceId = TraceContext.traceId();
         LOGGER.info("[getRoutesByRouteIds][Get Route By Ids][Route IDs：{}][TraceId: {}]", routeIds, traceId);
-        ActiveSpan.tag("request.type", "main");
         
         try {
             HttpEntity<List<String>> requestEntity = new HttpEntity<>(routeIds, headers);
             String route_service_url = getServiceUrl("ts-route-service");
 
-            // Make main request 
+            // Make initial request that will serve as parent for fanout
             ResponseEntity<Response> mainResponse = restTemplate.exchange(
                 route_service_url + "/api/v1/routeservice/routes/byIds/",
                 HttpMethod.POST,
@@ -548,25 +547,34 @@ public class BasicServiceImpl implements BasicService {
                 Response.class
             );
 
-            // Process main response
+            // Process response
             Response<List<Route>> result = mainResponse.getBody();
             if (result.getStatus() == 0) {
                 return null;
             }
             List<Route> routes = Arrays.asList(JsonUtils.conveterObject(result.getData(), Route[].class));
 
-            // Check if we should start burst
-            long currentTime = Instant.now().getEpochSecond();
-            long lastBurst = lastBurstTime.get();
-            
-            if (currentTime - lastBurst >= BURST_PERIOD_SECONDS && 
-                lastBurstTime.compareAndSet(lastBurst, currentTime)) {
-                    
+            // Check if we should do burst requests
+            if (shouldStartBurst()) {
                 LOGGER.info("[getRoutesByRouteIds][Starting burst][TraceId: {}]", traceId);
-                ActiveSpan.tag("burst.trigger", "true");
-
-                // Execute burst controller synchronously to maintain trace context
-                new BurstController(route_service_url, requestEntity).run();
+                
+                // Do burst requests synchronously to maintain trace context
+                for (int i = 0; i < BURST_DURATION_SECONDS; i++) {
+                    for (int j = 0; j < BURST_REQUESTS_PER_SEC; j++) {
+                        final int burstId = i * BURST_REQUESTS_PER_SEC + j + 1;
+                        
+                        // Each request should be a child of the main request
+                        ActiveSpan.tag("burst.id", String.valueOf(burstId));
+                        
+                        restTemplate.exchange(
+                            route_service_url + "/api/v1/routeservice/routes/byIds/",
+                            HttpMethod.POST,
+                            requestEntity,
+                            Response.class
+                        );
+                    }
+                    Thread.sleep(1000);
+                }
             }
 
             return routes;
