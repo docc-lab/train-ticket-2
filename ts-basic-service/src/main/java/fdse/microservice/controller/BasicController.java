@@ -67,7 +67,7 @@ public class BasicController {
     @GetMapping(path = "/getBurstParams")
     public String burstParams(@RequestHeader HttpHeaders headers) {
         return String.format(
-                "{}\n{}\n{}\n{}\n",
+                "%d\n%d\n%d\n%d\n",
                 BURST_REQUESTS_PER_SEC_2,
                 BURST_DURATION_SECONDS_2,
                 BURSTY_PERIOD_SECONDS_2,
