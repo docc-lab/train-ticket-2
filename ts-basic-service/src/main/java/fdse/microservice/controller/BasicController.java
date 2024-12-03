@@ -9,6 +9,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.web.bind.annotation.*;
 
+import java.util.ArrayList;
 import java.util.List;
 import javax.annotation.PreDestroy;
 import java.util.concurrent.ExecutorService;
@@ -38,7 +39,11 @@ public class BasicController {
     private static final int BURSTY_PERIOD_SECONDS = 60;    // Interval between burst waves
     private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
 
-    private final ExecutorService executorService;
+//    private final ExecutorService executorService;
+//    private final ScheduledExecutorService schedulerService;
+//    private final AtomicLong lastBurstTime = new AtomicLong(0);
+
+    private ExecutorService executorService;
     private final ScheduledExecutorService schedulerService;
     private final AtomicLong lastBurstTime = new AtomicLong(0);
 
@@ -75,6 +80,18 @@ public class BasicController {
         );
     }
 
+    @PostMapping(path = "/setBurstParams")
+    public HttpEntity setBurstParams(@RequestBody List<Integer> params, @RequestHeader HttpHeaders headers) {
+        this.BURST_REQUESTS_PER_SEC_2 = params.get(0);
+        this.BURST_DURATION_SECONDS_2 = params.get(1);
+        this.BURSTY_PERIOD_SECONDS_2 = params.get(2);
+        this.THREAD_POOL_SIZE_2 = params.get(3);
+
+        this.executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE_2);
+
+        return ok(null);
+    }
+
     @PostMapping(value = "/basic/travel")
     public HttpEntity queryForTravel(@RequestBody Travel info, @RequestHeader HttpHeaders headers) {
         // TravelResult
@@ -88,14 +105,17 @@ public class BasicController {
             long currentTime = Instant.now().getEpochSecond();
             long lastBurst = lastBurstTime.get();
             
-            if (currentTime - lastBurst >= BURSTY_PERIOD_SECONDS && 
+//            if (currentTime - lastBurst >= BURSTY_PERIOD_SECONDS &&
+            if (currentTime - lastBurst >= BURSTY_PERIOD_SECONDS_2 &&
                 lastBurstTime.compareAndSet(lastBurst, currentTime)) {
                 logger.info("[queryForTravel][Triggering new burst after {} seconds since last burst]", 
                           currentTime - lastBurst);
                 generateBurstLoad(info, headers);
-            } else if (currentTime - lastBurst < BURSTY_PERIOD_SECONDS) {
-                logger.debug("[queryForTravel][Skipping burst][{} seconds remaining in bursty period]", 
-                          BURSTY_PERIOD_SECONDS - (currentTime - lastBurst));
+//            } else if (currentTime - lastBurst < BURSTY_PERIOD_SECONDS) {
+            } else if (currentTime - lastBurst < BURSTY_PERIOD_SECONDS_2) {
+                logger.debug("[queryForTravel][Skipping burst][{} seconds remaining in bursty period]",
+//                          BURSTY_PERIOD_SECONDS - (currentTime - lastBurst));
+                          BURSTY_PERIOD_SECONDS_2 - (currentTime - lastBurst));
             }
 
             return ok(response);
@@ -121,12 +141,14 @@ public class BasicController {
 
     private void generateBurstLoad(Travel info, HttpHeaders headers) {
         logger.info("[generateBurstLoad][Starting burst: {} requests/sec for {} seconds. Next burst in {} seconds]", 
-                   BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, BURSTY_PERIOD_SECONDS);
+//                   BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, BURSTY_PERIOD_SECONDS);
+                   BURST_REQUESTS_PER_SEC_2, BURST_DURATION_SECONDS_2, BURSTY_PERIOD_SECONDS_2);
 
         // Schedule fixed-rate bursts for the duration
         ScheduledFuture<?> burstSchedule = schedulerService.scheduleAtFixedRate(() -> {
             // Submit all requests for this second instantly
-            for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
+//            for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
+            for (int i = 0; i < BURST_REQUESTS_PER_SEC_2; i++) {
                 executorService.submit(() -> {
                     try {
                         service.queryForTravel(info, headers);
@@ -141,8 +163,10 @@ public class BasicController {
         schedulerService.schedule(() -> {
             burstSchedule.cancel(false);
             logger.info("[generateBurstLoad][Burst completed][Next burst possible in {} seconds]", 
-                       BURSTY_PERIOD_SECONDS);
-        }, BURST_DURATION_SECONDS, TimeUnit.SECONDS);
+//                       BURSTY_PERIOD_SECONDS);
+                       BURSTY_PERIOD_SECONDS_2);
+//        }, BURST_DURATION_SECONDS, TimeUnit.SECONDS);
+        }, BURST_DURATION_SECONDS_2, TimeUnit.SECONDS);
     }
 
     @PreDestroy
