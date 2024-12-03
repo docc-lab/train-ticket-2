@@ -42,6 +42,11 @@ public class BasicController {
     private final ScheduledExecutorService schedulerService;
     private final AtomicLong lastBurstTime = new AtomicLong(0);
 
+    private int BURST_REQUESTS_PER_SEC_2 = 0;
+    private int BURST_DURATION_SECONDS_2 = 0;
+    private int BURSTY_PERIOD_SECONDS_2 = 0;
+    private int THREAD_POOL_SIZE_2 = 0;
+
     private static final Logger logger = LoggerFactory.getLogger(BasicController.class);
 
     @Autowired
@@ -57,6 +62,17 @@ public class BasicController {
     @GetMapping(path = "/welcome")
     public String home(@RequestHeader HttpHeaders headers) {
         return "Welcome to [ Basic Service ] !";
+    }
+
+    @GetMapping(path = "/getBurstParams")
+    public String burstParams(@RequestHeader HttpHeaders headers) {
+        return String.format(
+                "{}\n{}\n{}\n{}\n",
+                BURST_REQUESTS_PER_SEC_2,
+                BURST_DURATION_SECONDS_2,
+                BURSTY_PERIOD_SECONDS_2,
+                THREAD_POOL_SIZE_2
+        );
     }
 
     @PostMapping(value = "/basic/travel")
