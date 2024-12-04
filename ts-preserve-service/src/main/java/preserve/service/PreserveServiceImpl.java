@@ -39,10 +39,10 @@ import java.time.Instant;
 @Service
 public class PreserveServiceImpl implements PreserveService {
 
-    private static final int BURST_REQUESTS_PER_SEC = 5;    // Bursty load size in rqs
-    private static final int BURST_DURATION_SECONDS = 10;   // Duration of one burst wave
-    private static final int BURSTY_PERIOD_SECONDS = 60;    // Interval between burst waves
-    private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
+    private static int BURST_REQUESTS_PER_SEC = 5;    // Bursty load size in rqs
+    private static int BURST_DURATION_SECONDS = 10;   // Duration of one burst wave
+    private static int BURSTY_PERIOD_SECONDS = 60;    // Interval between burst waves
+    private static int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
 
     private ExecutorService executorService;
     private final ScheduledExecutorService schedulerService;
