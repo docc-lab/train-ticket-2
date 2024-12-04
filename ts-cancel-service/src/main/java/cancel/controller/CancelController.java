@@ -56,11 +56,13 @@ public class CancelController {
         LOGGER.info("CancelController initialization completed");
     }
 
+    @CrossOrigin(origins = "*")
     @GetMapping(path = "/welcome")
     public String home(@RequestHeader HttpHeaders headers) {
         return "Welcome to [ Cancel Service ] !";
     }
 
+    @CrossOrigin(origins = "*")
     @GetMapping(path = "/getBurstParams")
     public String burstParams(@RequestHeader HttpHeaders headers) {
         return String.format(
@@ -72,6 +74,7 @@ public class CancelController {
         );
     }
 
+    @CrossOrigin(origins = "*")
     @PostMapping(path = "/setBurstParams")
     public HttpEntity setBurstParams(@RequestBody List<Integer> params, @RequestHeader HttpHeaders headers) {
         this.BURSTY_PERIOD_SECONDS_2 = params.get(0);
