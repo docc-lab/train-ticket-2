@@ -73,9 +73,9 @@ public class BasicController {
     public String burstParams(@RequestHeader HttpHeaders headers) {
         return String.format(
                 "%d\n%d\n%d\n%d\n",
+                BURSTY_PERIOD_SECONDS_2,
                 BURST_REQUESTS_PER_SEC_2,
                 BURST_DURATION_SECONDS_2,
-                BURSTY_PERIOD_SECONDS_2,
                 THREAD_POOL_SIZE_2
         );
     }
@@ -86,7 +86,7 @@ public class BasicController {
         this.BURST_REQUESTS_PER_SEC_2 = params.get(1);
         this.BURST_DURATION_SECONDS_2 = params.get(2);
 //        this.THREAD_POOL_SIZE_2 = params.get(3);
-        this.THREAD_POOL_SIZE_2 = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
+        this.THREAD_POOL_SIZE_2 = Math.max(1, BURST_REQUESTS_PER_SEC_2 * 2);
 
         this.executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE_2);
 
