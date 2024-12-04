@@ -50,7 +50,7 @@ public class BasicController {
     private int BURST_REQUESTS_PER_SEC_2 = 0;
     private int BURST_DURATION_SECONDS_2 = 0;
     private int BURSTY_PERIOD_SECONDS_2 = 0;
-    private int THREAD_POOL_SIZE_2 = 0;
+    private int THREAD_POOL_SIZE_2 = 1;
 
     private static final Logger logger = LoggerFactory.getLogger(BasicController.class);
 
@@ -82,10 +82,11 @@ public class BasicController {
 
     @PostMapping(path = "/setBurstParams")
     public HttpEntity setBurstParams(@RequestBody List<Integer> params, @RequestHeader HttpHeaders headers) {
-        this.BURST_REQUESTS_PER_SEC_2 = params.get(0);
-        this.BURST_DURATION_SECONDS_2 = params.get(1);
-        this.BURSTY_PERIOD_SECONDS_2 = params.get(2);
-        this.THREAD_POOL_SIZE_2 = params.get(3);
+        this.BURSTY_PERIOD_SECONDS_2 = params.get(0);
+        this.BURST_REQUESTS_PER_SEC_2 = params.get(1);
+        this.BURST_DURATION_SECONDS_2 = params.get(2);
+//        this.THREAD_POOL_SIZE_2 = params.get(3);
+        this.THREAD_POOL_SIZE_2 = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
 
         this.executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE_2);
 
