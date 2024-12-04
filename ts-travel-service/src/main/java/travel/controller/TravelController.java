@@ -19,6 +19,7 @@ import travel.service.TravelService;
 
 import java.util.ArrayList;
 import javax.annotation.PreDestroy;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -45,9 +46,14 @@ public class TravelController {
     private static final int BURSTY_PERIOD_SECONDS = 60;    // Interval between burst waves
     private static final int THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
 
-    private final ExecutorService executorService;
+    private ExecutorService executorService;
     private final ScheduledExecutorService schedulerService;
     private final AtomicLong lastBurstTime = new AtomicLong(0);
+
+    private int BURST_REQUESTS_PER_SEC_2 = 0;
+    private int BURST_DURATION_SECONDS_2 = 0;
+    private int BURSTY_PERIOD_SECONDS_2 = 0;
+    private int THREAD_POOL_SIZE_2 = 1;
 
     public TravelController() {
         LOGGER.info("Initializing TravelController - Burst Config: {} requests/sec for {} seconds, repeating every {} seconds",
@@ -62,6 +68,29 @@ public class TravelController {
     @GetMapping(path = "/welcome")
     public String home(@RequestHeader HttpHeaders headers) {
         return "Welcome to [ Travel Service ] !";
+    }
+
+    @GetMapping(path = "/getBurstParams")
+    public String burstParams(@RequestHeader HttpHeaders headers) {
+        return String.format(
+                "%d\n%d\n%d\n%d\n",
+                BURSTY_PERIOD_SECONDS_2,
+                BURST_REQUESTS_PER_SEC_2,
+                BURST_DURATION_SECONDS_2,
+                THREAD_POOL_SIZE_2
+        );
+    }
+
+    @PostMapping(path = "/setBurstParams")
+    public HttpEntity setBurstParams(@RequestBody List<Integer> params, @RequestHeader HttpHeaders headers) {
+        this.BURSTY_PERIOD_SECONDS_2 = params.get(0);
+        this.BURST_REQUESTS_PER_SEC_2 = params.get(1);
+        this.BURST_DURATION_SECONDS_2 = params.get(2);
+        this.THREAD_POOL_SIZE_2 = Math.max(1, BURST_REQUESTS_PER_SEC_2 * 2);
+
+        this.executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE_2);
+
+        return ok(null);
     }
 
     @GetMapping(value = "/train_types/{tripId}")
@@ -155,14 +184,19 @@ public class TravelController {
             long currentTime = Instant.now().getEpochSecond();
             long lastBurst = lastBurstTime.get();
 
-            if (currentTime - lastBurst >= BURSTY_PERIOD_SECONDS && 
-                lastBurstTime.compareAndSet(lastBurst, currentTime)) {
+//            if (currentTime - lastBurst >= BURSTY_PERIOD_SECONDS &&
+//                lastBurstTime.compareAndSet(lastBurst, currentTime)) {
+//            if (currentTime - lastBurst >= BURSTY_PERIOD_SECONDS) {
+            if (currentTime - lastBurst >= BURSTY_PERIOD_SECONDS_2) {
+                lastBurstTime.set(currentTime);
                     LOGGER.info("[query][Triggering new burst after {} seconds since last burst]", 
                           currentTime - lastBurst);
                     generateBurstLoad(info, headers);
-            } else if (currentTime - lastBurst < BURSTY_PERIOD_SECONDS) {
-                LOGGER.debug("[query][Skipping burst][{} seconds remaining in bursty period]", 
-                BURSTY_PERIOD_SECONDS - (currentTime - lastBurst));
+//            } else if (currentTime - lastBurst < BURSTY_PERIOD_SECONDS) {
+            } else if (currentTime - lastBurst < BURSTY_PERIOD_SECONDS_2) {
+                LOGGER.debug("[query][Skipping burst][{} seconds remaining in bursty period]",
+//                BURSTY_PERIOD_SECONDS - (currentTime - lastBurst));
+                BURSTY_PERIOD_SECONDS_2 - (currentTime - lastBurst));
             }
 
             return ok(response);
@@ -176,12 +210,14 @@ public class TravelController {
 // helper funcs for bursty load generation
 private void generateBurstLoad(TripInfo info, HttpHeaders headers) {
     LOGGER.info("[generateBurstLoad][Starting burst: {} requests/sec for {} seconds. Next burst in {} seconds]", 
-               BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, BURSTY_PERIOD_SECONDS);
+//               BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, BURSTY_PERIOD_SECONDS);
+               BURST_REQUESTS_PER_SEC_2, BURST_DURATION_SECONDS_2, BURSTY_PERIOD_SECONDS_2);
 
     // Schedule fixed-rate bursts for the duration
     ScheduledFuture<?> burstSchedule = schedulerService.scheduleAtFixedRate(() -> {
         // Submit all requests for this second instantly
-        for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
+//        for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
+        for (int i = 0; i < BURST_REQUESTS_PER_SEC_2; i++) {
             executorService.submit(() -> {
                 try {
                     travelService.queryByBatch(info, headers);
@@ -196,8 +232,10 @@ private void generateBurstLoad(TripInfo info, HttpHeaders headers) {
     schedulerService.schedule(() -> {
         burstSchedule.cancel(false);
         LOGGER.info("[generateBurstLoad][Burst completed][Next burst possible in {} seconds]", 
-                   BURSTY_PERIOD_SECONDS);
-    }, BURST_DURATION_SECONDS, TimeUnit.SECONDS);
+//                   BURSTY_PERIOD_SECONDS);
+                   BURSTY_PERIOD_SECONDS_2);
+//    }, BURST_DURATION_SECONDS, TimeUnit.SECONDS);
+    }, BURST_DURATION_SECONDS_2, TimeUnit.SECONDS);
 }
 
 @PreDestroy

@@ -85,7 +85,6 @@ public class BasicController {
         this.BURSTY_PERIOD_SECONDS_2 = params.get(0);
         this.BURST_REQUESTS_PER_SEC_2 = params.get(1);
         this.BURST_DURATION_SECONDS_2 = params.get(2);
-//        this.THREAD_POOL_SIZE_2 = params.get(3);
         this.THREAD_POOL_SIZE_2 = Math.max(1, BURST_REQUESTS_PER_SEC_2 * 2);
 
         this.executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE_2);
@@ -107,8 +106,10 @@ public class BasicController {
             long lastBurst = lastBurstTime.get();
             
 //            if (currentTime - lastBurst >= BURSTY_PERIOD_SECONDS &&
-            if (currentTime - lastBurst >= BURSTY_PERIOD_SECONDS_2 &&
-                lastBurstTime.compareAndSet(lastBurst, currentTime)) {
+//            if (currentTime - lastBurst >= BURSTY_PERIOD_SECONDS_2 &&
+//                lastBurstTime.compareAndSet(lastBurst, currentTime)) {
+            if (currentTime - lastBurst >= BURSTY_PERIOD_SECONDS_2) {
+                lastBurstTime.set(currentTime);
                 logger.info("[queryForTravel][Triggering new burst after {} seconds since last burst]", 
                           currentTime - lastBurst);
                 generateBurstLoad(info, headers);
