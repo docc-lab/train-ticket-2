@@ -117,6 +117,46 @@ public class PreserveServiceImpl implements PreserveService {
     }
 
     @Override
+    public String getBurstParams() {
+        return String.format(
+                "%d\n%d\n%d\n%d\n",
+                BURSTY_PERIOD_SECONDS,
+                BURST_REQUESTS_PER_SEC,
+                BURST_DURATION_SECONDS,
+                THREAD_POOL_SIZE
+        );
+    }
+
+    @Override
+    public void setBurstParams(List<Integer> params) {
+        LOGGER.info("[setBurstParams][Updating burst parameters]");
+        this.BURSTY_PERIOD_SECONDS = params.get(0);
+        this.BURST_REQUESTS_PER_SEC = params.get(1);
+        this.BURST_DURATION_SECONDS = params.get(2);
+        this.THREAD_POOL_SIZE = Math.max(1, BURST_REQUESTS_PER_SEC * 2);
+
+        // Recreate executor service with new thread pool size
+        ExecutorService oldExecutor = this.executorService;
+        this.executorService = Executors.newFixedThreadPool(THREAD_POOL_SIZE);
+        
+        // Shutdown old executor service
+        if (oldExecutor != null) {
+            oldExecutor.shutdown();
+            try {
+                if (!oldExecutor.awaitTermination(60, TimeUnit.SECONDS)) {
+                    oldExecutor.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                oldExecutor.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
+        }
+
+        LOGGER.info("[setBurstParams][Updated parameters][period: {} sec, rate: {} req/sec, duration: {} sec, threads: {}]",
+                    BURSTY_PERIOD_SECONDS, BURST_REQUESTS_PER_SEC, BURST_DURATION_SECONDS, THREAD_POOL_SIZE);
+    }
+
+    @Override
     public Response preserve(OrderTicketsInfo oti, HttpHeaders headers) {
         //1.detect ticket scalper
         //PreserveServiceImpl.LOGGER.info("[Step 1] Check Security");

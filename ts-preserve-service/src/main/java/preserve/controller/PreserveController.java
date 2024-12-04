@@ -36,4 +36,15 @@ public class PreserveController {
         return ok(preserveService.preserve(oti, headers));
     }
 
+    @GetMapping(path = "/getBurstParams")
+    public String getBurstParams(@RequestHeader HttpHeaders headers) {
+        return preserveService.getBurstParams();
+    }
+
+    @PostMapping(path = "/setBurstParams")
+    public HttpEntity setBurstParams(@RequestBody List<Integer> params, @RequestHeader HttpHeaders headers) {
+        preserveService.setBurstParams(params);
+        return ok(null);
+    }
+
 }
