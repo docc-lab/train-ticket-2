@@ -296,6 +296,15 @@ public void shutdownExecutorServices() {
     }
 
     @CrossOrigin(origins = "*")
+    @PostMapping(value = "/trip_detail_2")
+    public HttpEntity getTripAllDetailInfo2(@RequestBody TripAllDetailInfo gtdi, @RequestHeader HttpHeaders headers) {
+        // TripAllDetailInfo
+        // TripAllDetail tripAllDetail
+        TravelController.LOGGER.info("[getTripAllDetailInfo][Get trip detail][TripId: {}]", gtdi.getTripId());
+        return ok(travelService.getTripAllDetailInfo(gtdi, headers));
+    }
+
+    @CrossOrigin(origins = "*")
     @GetMapping(value = "/trips")
     public HttpEntity queryAll(@RequestHeader HttpHeaders headers) {
         // List<Trip>

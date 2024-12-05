@@ -477,7 +477,8 @@ public class PreserveServiceImpl implements PreserveService {
             HttpEntity requestGetTripAllDetailResult = new HttpEntity(gtdi, httpHeaders);
             String travel_service_url = getServiceUrl("ts-travel-service");
             ResponseEntity<Response<TripAllDetail>> response = restTemplate.exchange(
-                    travel_service_url + "/api/v1/travelservice/trip_detail",
+//                    travel_service_url + "/api/v1/travelservice/trip_detail",
+                    travel_service_url + "/api/v1/travelservice/trip_detail_2",
                     HttpMethod.POST,
                     requestGetTripAllDetailResult,
                     new ParameterizedTypeReference<Response<TripAllDetail>>() {
