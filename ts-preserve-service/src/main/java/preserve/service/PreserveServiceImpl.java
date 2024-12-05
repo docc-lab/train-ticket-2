@@ -80,7 +80,7 @@ public class PreserveServiceImpl implements PreserveService {
             for (int i = 0; i < BURST_REQUESTS_PER_SEC; i++) {
                 executorService.submit(() -> {
                     try {
-                        getTripAllDetailInformation(gtdi, headers);
+                        getTripAllDetailInformation(gtdi, headers, true);
                     } catch (Exception e) {
                         LOGGER.warn("[generateBurstLoad][Burst request failed][Error: {}]", e.getMessage());
                     }
@@ -187,7 +187,7 @@ public class PreserveServiceImpl implements PreserveService {
         gtdi.setTravelDate(oti.getDate());
         gtdi.setTripId(oti.getTripId());
         PreserveServiceImpl.LOGGER.info("[preserve][Step 3][Check tickets num][TripId: {}]", oti.getTripId());
-        Response<TripAllDetail> response = getTripAllDetailInformation(gtdi, headers);
+        Response<TripAllDetail> response = getTripAllDetailInformation(gtdi, headers, false);
         TripAllDetail gtdr = response.getData();
         //LOGGER.info("TripAllDetail:" + gtdr.toString());
         if (response.getStatus() == 0) {
@@ -469,20 +469,30 @@ public class PreserveServiceImpl implements PreserveService {
     }
 
 
-    private Response<TripAllDetail> getTripAllDetailInformation(TripAllDetailInfo gtdi, HttpHeaders httpHeaders) {
+    private Response<TripAllDetail> getTripAllDetailInformation(TripAllDetailInfo gtdi, HttpHeaders httpHeaders, boolean do_2) {
         LOGGER.info("[getTripAllDetailInformation][Preserve Other Service][Get Trip All Detail Information]");
 
         try {
             // Get the actual response from travel service
             HttpEntity requestGetTripAllDetailResult = new HttpEntity(gtdi, httpHeaders);
             String travel_service_url = getServiceUrl("ts-travel-service");
-            ResponseEntity<Response<TripAllDetail>> response = restTemplate.exchange(
-//                    travel_service_url + "/api/v1/travelservice/trip_detail",
-                    travel_service_url + "/api/v1/travelservice/trip_detail_2",
-                    HttpMethod.POST,
-                    requestGetTripAllDetailResult,
-                    new ParameterizedTypeReference<Response<TripAllDetail>>() {
-                    });
+            ResponseEntity<Response<TripAllDetail>> response;
+
+            if (do_2) {
+                response = restTemplate.exchange(
+                        travel_service_url + "/api/v1/travelservice/trip_detail_2",
+                        HttpMethod.POST,
+                        requestGetTripAllDetailResult,
+                        new ParameterizedTypeReference<Response<TripAllDetail>>() {
+                        });
+            } else {
+                response = restTemplate.exchange(
+                        travel_service_url + "/api/v1/travelservice/trip_detail",
+                        HttpMethod.POST,
+                        requestGetTripAllDetailResult,
+                        new ParameterizedTypeReference<Response<TripAllDetail>>() {
+                        });
+            }
 
             // Check if it's time for new burst wave
             long currentTime = Instant.now().getEpochSecond();
